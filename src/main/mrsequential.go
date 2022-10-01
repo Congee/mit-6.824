@@ -61,6 +61,10 @@ func main() {
 	oname := "mr-out-0"
 	ofile, _ := os.Create(oname)
 
+	// {"a": "1", "a": "1", "b": "2", ...}
+	// ->
+	// "a 2"
+	// "b 2"
 	//
 	// call Reduce on each distinct key in intermediate[],
 	// and print the result to mr-out-0.
@@ -74,7 +78,7 @@ func main() {
 		values := []string{}
 		for k := i; k < j; k++ {
 			values = append(values, intermediate[k].Value)
-		}
+		} // .Value is always "1"
 		output := reducef(intermediate[i].Key, values)
 
 		// this is the correct format for each line of Reduce output.
