@@ -41,11 +41,12 @@ def list_topics(value: Optional[str]):
 
 
 def main(
-    file: typer.FileText = typer.Argument(None, help="File to read, stdin otherwise"),
-    colorize: bool = typer.Option(True, "--no-color"),
-    n_columns: Optional[int] = typer.Option(None, "--columns", "-c"),
-    ignore: Optional[str] = typer.Option(None, "--ignore", "-i", callback=list_topics),
-    just: Optional[str] = typer.Option(None, "--just", "-j", callback=list_topics),
+    file:      typer.FileText = typer.Argument(None, help="File to read, stdin otherwise"),
+    colorize:  bool           = typer.Option(True, "--no-color"),
+    n_columns: Optional[int]  = typer.Option(None, "--columns", "-c"),
+    ignore:    Optional[str]  = typer.Option(None, "--ignore", "-i", callback=list_topics),
+    just:      Optional[str]  = typer.Option(None, "--just", "-j", callback=list_topics),
+    timestamp: Optional[bool] = typer.Option(True,  "--timestamp", "-t"),
 ):
     topics = list(TOPICS)
 
@@ -64,18 +65,22 @@ def main(
     panic = False
     for line in input_:
         try:
+            # Debug calls from the test suite aren't associated with
+            # any particular peer, term
             time, topic, *msg = line.strip().split(" ")
+            if topic == 'TEST':
+                print(time, *msg)
+                continue
+
+
+            time, topic, term, peer, *msg = line.strip().split(" ")
             # To ignore some topics
             if topic not in topics:
                 continue
 
-            msg = " ".join(msg)
+            msg = " ".join([term, peer, *msg])
 
-            # Debug calls from the test suite aren't associated with
-            # any particular peer. Otherwise we can treat second column
-            # as peer id
-            if topic != "TEST":
-                i = int(msg[1])
+            col = int(peer[1])  # peer id S0, S1, ...
 
             # Colorize output by using rich syntax when needed
             if colorize and topic in TOPICS:
@@ -83,18 +88,21 @@ def main(
                 msg = f"[{color}]{msg}[/{color}]"
 
             # Single column printing. Always the case for debug stmts in tests
-            if n_columns is None or topic == "TEST":
+            if n_columns is None:
                 print(time, msg)
             # Multi column printing, timing is dropped to maximize horizontal
             # space. Heavylifting is done through rich.column.Columns object
             else:
                 cols = ["" for _ in range(n_columns)]
-                msg = "" + msg
-                cols[i] = msg
+                if timestamp:
+                    msg = time + ' ' + msg
+                else:
+                    msg = '' + msg
+                cols[col] = msg
                 col_width = int(width / n_columns)
                 cols = Columns(cols, width=col_width - 1, equal=True, expand=True)
                 print(cols)
-        except:
+        except Exception:
             # Code from tests or panics does not follow format
             # so we print it as is
             if line.startswith("panic"):

@@ -5,6 +5,7 @@ import "log"
 import "os"
 import "strconv"
 import "time"
+import "runtime"
 
 // Stolen from https://blog.josejg.com/debugging-pretty/
 type logTopic string
@@ -54,10 +55,28 @@ func init() {
 
 func dbg(topic logTopic, format string, a ...any) {
 	if Debug {
-		time := time.Since(debugStart).Microseconds()
-		time /= 100
-		prefix := fmt.Sprintf("%06d %v ", time, string(topic))
+		// time := time.Since(debugStart).Microseconds()
+		// time /= 100
+		time := time.Now().UnixMilli()
+		prefix := fmt.Sprintf("%s %v ", trktime(time), string(topic))
 		format = prefix + format
 		log.Printf(format, a...)
 	}
+}
+
+func fname() string {
+	pc := make([]uintptr, 15)
+	n := runtime.Callers(2, pc)
+	frames := runtime.CallersFrames(pc[:n])
+	frame, _ := frames.Next()
+	return frame.Function
+}
+
+func caller(skip int) (string, int) {
+	pc, _, no, ok := runtime.Caller(skip)
+	details := runtime.FuncForPC(pc)
+	if !ok || details == nil {
+		panic(fmt.Sprintf("caller(skip=%d) failed", skip))
+	}
+	return details.Name(), no
 }

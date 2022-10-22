@@ -20,6 +20,8 @@
             pkgs.go-outline
             pkgs.gopkgs
 
+            pkgs.lnav
+
             pkgs.python310
             pkgs.python310Packages.rich
             pkgs.python310Packages.typer
