@@ -80,3 +80,13 @@ func caller(skip int) (string, int) {
 	}
 	return details.Name(), no
 }
+
+func (rf *Raft) dbg(topic logTopic, format string, args ...any) {
+	rf.dbgt(topic, rf.state.currentTerm.Load(), format, args...)
+}
+
+// dbg with term because term may change before and after sending an RPC
+func (rf *Raft) dbgt(topic logTopic, term int64, format string, args ...any) {
+	prefix := fmt.Sprintf("T%d S%d ", term, rf.me)
+	dbg(topic, prefix+format, args...)
+}

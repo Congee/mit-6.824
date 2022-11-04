@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"fmt"
 	"math/rand"
 	"strings"
 	"time"
@@ -157,16 +156,6 @@ type State struct {
 
 	nextIndex  []int64
 	matchIndex []int64
-}
-
-// dbg with term because term may change before and after sending an RPC
-func (rf *Raft) dbgt(topic logTopic, term int64, format string, args ...any) {
-	prefix := fmt.Sprintf("T%d S%d ", term, rf.me)
-	dbg(topic, prefix+format, args...)
-}
-
-func (rf *Raft) dbg(topic logTopic, format string, args ...any) {
-	rf.dbgt(topic, rf.state.currentTerm.Load(), format, args...)
 }
 
 func (rf *Raft) Lock() {
