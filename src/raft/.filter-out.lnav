@@ -1,0 +1,7 @@
+#
+# @synopsis: filter out debug messages
+# @description: Nope
+#
+
+:filter-out tick
+:filter-out retrying

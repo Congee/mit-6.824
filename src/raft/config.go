@@ -8,20 +8,23 @@ package raft
 // test with the original before submitting.
 //
 
-import "6.824/labgob"
-import "6.824/labrpc"
-import "bytes"
-import "log"
-import "sync"
-import "sync/atomic"
-import "testing"
-import "runtime"
-import "math/rand"
-import crand "crypto/rand"
-import "math/big"
-import "encoding/base64"
-import "time"
-import "fmt"
+import (
+	"bytes"
+	crand "crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"log"
+	"math/big"
+	"math/rand"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"6.824/labgob"
+	"6.824/labrpc"
+)
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -138,6 +141,9 @@ func (cfg *config) crash1(i int) {
 }
 
 func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
+	rf := cfg.rafts[i]
+	rf.dbg(dTest, "checkLogs i=%d m=%v", i, m)
+
 	err_msg := ""
 	v := m.Command
 	for j := 0; j < len(cfg.logs); j++ {
@@ -159,7 +165,11 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 // applier reads message from apply ch and checks that they match the log
 // contents
 func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
+	rf := cfg.rafts[i]
+	rf.dbg(dTest, "applier on i=%d applyCh=%v", i, applyCh)
+
 	for m := range applyCh {
+		rf.dbg(dTest, "applier rcvd msg=%v", m)
 		if m.CommandValid == false {
 			// ignore other types of ApplyMsg
 		} else {
@@ -267,13 +277,11 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	}
 }
 
-//
 // start or re-start a Raft.
 // if one already exists, "kill" it first.
 // allocate new outgoing port file names, and a new
 // state persister, to isolate previous instance of
 // this server. since we cannot really kill it.
-//
 func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
 	cfg.crash1(i)
 
@@ -358,6 +366,7 @@ func (cfg *config) cleanup() {
 
 // attach server i to the net.
 func (cfg *config) connect(i int) {
+	dbg(dTest, "T0  S%d connect()", i)
 	// fmt.Printf("connect(%d)\n", i)
 
 	cfg.connected[i] = true
@@ -381,6 +390,7 @@ func (cfg *config) connect(i int) {
 
 // detach server i from the net.
 func (cfg *config) disconnect(i int) {
+	dbg(dTest, "T0  S%d disconnect()", i)
 	// fmt.Printf("disconnect(%d)\n", i)
 
 	cfg.connected[i] = false
@@ -422,13 +432,11 @@ func (cfg *config) setlongreordering(longrel bool) {
 	cfg.net.LongReordering(longrel)
 }
 
-//
 // check that one of the connected servers thinks
 // it is the leader, and that no other connected
 // server thinks otherwise.
 //
 // try a few times in case re-elections are needed.
-//
 func (cfg *config) checkOneLeader() int {
 	for iters := 0; iters < 10; iters++ {
 		ms := 450 + (rand.Int63() % 100)
@@ -454,6 +462,7 @@ func (cfg *config) checkOneLeader() int {
 		}
 
 		if len(leaders) != 0 {
+			cfg.rafts[leaders[lastTermWithLeader][0]].dbg(dTest, " <- checkOneLeader()")
 			return leaders[lastTermWithLeader][0]
 		}
 	}
@@ -477,10 +486,8 @@ func (cfg *config) checkTerms() int {
 	return term
 }
 
-//
 // check that none of the connected servers
 // thinks it is the leader.
-//
 func (cfg *config) checkNoLeader() {
 	for i := 0; i < cfg.n; i++ {
 		if cfg.connected[i] {
@@ -501,8 +508,23 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			cfg.t.Fatal(cfg.applyErr[i])
 		}
 
+		done := make(chan State)
+		cfg.rafts[i].fire(ReadStateByTest{done})
+		state := <-done
+
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
+
+		rf := cfg.rafts[i]
+		rf.dbg(
+			dTest,
+			"finding log@%v=%v logs=%v test_logs=%v",
+			index,
+			ok,
+			state.logs,
+			cfg.logs[i],
+		)
+
 		cfg.mu.Unlock()
 
 		if ok {
@@ -563,12 +585,12 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 	t0 := time.Now()
 	starts := 0
+	var rf *Raft
 	for time.Since(t0).Seconds() < 10 && cfg.checkFinished() == false {
 		// try all the servers, maybe one is the leader.
 		index := -1
 		for si := 0; si < cfg.n; si++ {
 			starts = (starts + 1) % cfg.n
-			var rf *Raft
 			cfg.mu.Lock()
 			if cfg.connected[starts] {
 				rf = cfg.rafts[starts]
@@ -583,12 +605,15 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			}
 		}
 
+		rf.dbg(dTest, "found index=%v of cmd=%+v", index, cmd)
+
 		if index != -1 {
 			// somebody claimed to be the leader and to have
 			// submitted our command; wait a while for agreement.
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				rf.dbg(dTest, "found index=%v nd=%v of cmd=%+v cmd1=%v", index, nd, cmd, cmd1)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {

@@ -104,7 +104,10 @@ def run_test(test: str, race: bool, timing: bool, timeout: str):
         test_cmd.append("-race")
     if timing:
         test_cmd = ["time"] + test_cmd
-    f, path = tempfile.mkstemp()
+
+    folder = Path('/tmp/raft')
+    folder.mkdir(exist_ok=True)
+    f, path = tempfile.mkstemp(dir=str(folder))
     start = time.time()
     proc = subprocess.run(test_cmd, stdout=f, stderr=f)
     runtime = time.time() - start
@@ -222,7 +225,7 @@ def run_tests(
                         if rc != 0 or archive:
                             output.mkdir(exist_ok=True, parents=True)
                             shutil.copy(path, dest)
- 
+
                         if timing:
                             line = last_line(path)
                             real, _, user, _, system, _ = line.replace(' '*8, '').split(' ')

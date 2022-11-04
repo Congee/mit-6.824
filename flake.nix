@@ -19,6 +19,7 @@
             pkgs.gopls
             pkgs.go-outline
             pkgs.gopkgs
+            pkgs.delve
 
             pkgs.lnav
 
