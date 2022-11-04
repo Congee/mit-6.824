@@ -68,10 +68,9 @@ def main(
             # Debug calls from the test suite aren't associated with
             # any particular peer, term
             time, topic, *msg = line.strip().split(" ")
-            if topic == 'TEST':
-                print(time, *msg)
-                continue
-
+            # if topic == 'TEST':
+            #     print(time, *msg)
+            #     continue
 
             time, topic, term, peer, *msg = line.strip().split(" ")
             # To ignore some topics

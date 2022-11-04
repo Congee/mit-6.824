@@ -1,11 +1,13 @@
 package raft
 
-import "fmt"
-import "log"
-import "os"
-import "strconv"
-import "time"
-import "runtime"
+import (
+	"fmt"
+	"log"
+	"os"
+	"strconv"
+	"time"
+	"runtime"
+)
 
 // Stolen from https://blog.josejg.com/debugging-pretty/
 type logTopic string
@@ -43,8 +45,10 @@ func getVerbosity() int {
 	return level
 }
 
-var debugStart time.Time
-var debugVerbosity int
+var (
+	debugStart     time.Time
+	debugVerbosity int
+)
 
 func init() {
 	debugVerbosity = getVerbosity()
@@ -55,10 +59,7 @@ func init() {
 
 func dbg(topic logTopic, format string, a ...any) {
 	if Debug {
-		// time := time.Since(debugStart).Microseconds()
-		// time /= 100
-		time := time.Now().UnixMilli()
-		prefix := fmt.Sprintf("%s %v ", trktime(time), string(topic))
+		prefix := fmt.Sprintf("%s %v ", trktime(time.Now()), topic)
 		format = prefix + format
 		log.Printf(format, a...)
 	}
@@ -87,6 +88,6 @@ func (rf *Raft) dbg(topic logTopic, format string, args ...any) {
 
 // dbg with term because term may change before and after sending an RPC
 func (rf *Raft) dbgt(topic logTopic, term int64, format string, args ...any) {
-	prefix := fmt.Sprintf("T%d S%d ", term, rf.me)
+	prefix := fmt.Sprintf("T%-2d S%d ", term, rf.me)
 	dbg(topic, prefix+format, args...)
 }

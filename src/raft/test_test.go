@@ -71,18 +71,19 @@ func TestReElection2A(t *testing.T) {
 
 	// if there's no quorum, no new leader should
 	// be elected.
-	dbg(dTest, "cfg.disconnect(leader2=%v)", leader2)
-	dbg(dTest, "cfg.disconnect((leader2 + 1) %% servers = %d)", (leader2+1)%servers)
+	// dbg(dTest, "cfg.disconnect(leader2=%v)", leader2)
+	// dbg(dTest, "cfg.disconnect((leader2 + 1) %% servers = %d)", (leader2+1)%servers)
 	cfg.disconnect(leader2)
 	cfg.disconnect((leader2 + 1) % servers)
 	time.Sleep(2 * RaftElectionTimeout)
 
 	// check that the one connected server
 	// does not think it is the leader.
+	dbg(dTest, "cfg.checkNoLeader()")
 	cfg.checkNoLeader()
 
 	// if a quorum arises, it should elect a leader.
-	dbg(dTest, "cfg.connect((leader2 + 1) %% servers = %d)", (leader2+1)%servers)
+	// dbg(dTest, "cfg.connect((leader2 + 1) %% servers = %d)", (leader2+1)%servers)
 	cfg.connect((leader2 + 1) % servers)
 	cfg.checkOneLeader()
 
@@ -149,6 +150,7 @@ func TestBasicAgree2B(t *testing.T) {
 			t.Fatalf("some have committed before Start()")
 		}
 
+    dbg(dTest, "S0 T0 cfg.one(index=%v, servers=%v, retry=%v)", index*100, servers, false)
 		xindex := cfg.one(index*100, servers, false)
 		if xindex != index {
 			t.Fatalf("got index %v but expected %v", xindex, index)
@@ -417,6 +419,10 @@ loop:
 		cmds := []int{}
 		for index := range is {
 			cmd := cfg.wait(index, servers, term)
+      if cmd.(int) != -1 {
+        cfg.rafts[leader].dbg(dTest, "cmd=%v=wait(index=%v)", cmd, index)
+        cfg.rafts[leader].dbg(dTest, "append(cmd=%v, ix=%v)", cmds, cmd)
+      }
 			if ix, ok := cmd.(int); ok {
 				if ix == -1 {
 					// peers have moved on to later terms
@@ -440,10 +446,10 @@ loop:
 			continue
 		}
 
-		for ii := 0; ii < iters; ii++ {
-			x := 100 + ii
+    // cmds should be [1, 100, 101, 102, 103, 104] + [<nil>, ...]
+		for x := 100; x < 100+iters; x++ {
 			ok := false
-			for j := 0; j < len(cmds); j++ {
+      for j := 0; j < len(cmds); j++ {  // ok := cmds.Contains(x)
 				if cmds[j] == x {
 					ok = true
 				}
@@ -475,6 +481,7 @@ func TestRejoin2B(t *testing.T) {
 
 	// leader network failure
 	leader1 := cfg.checkOneLeader()
+  cfg.rafts[leader1].dbg(dTest, "disconnect")
 	cfg.disconnect(leader1)
 
 	// make old leader try to agree on some entries
@@ -487,17 +494,19 @@ func TestRejoin2B(t *testing.T) {
 
 	// new leader network failure
 	leader2 := cfg.checkOneLeader()
+  cfg.rafts[leader2].dbg(dTest, "disconnect")
 	cfg.disconnect(leader2)
 
 	// old leader connected again
+  cfg.rafts[leader1].dbg(dTest, "connect")
 	cfg.connect(leader1)
 
 	cfg.one(104, 2, true)
 
 	// all together now
-	cfg.connect(leader2)
-
-	cfg.one(105, servers, true)
+	// cfg.connect(leader2)
+	//
+	// cfg.one(105, servers, true)
 
 	cfg.end()
 }
@@ -509,67 +518,84 @@ func TestBackup2B(t *testing.T) {
 
 	cfg.begin("Test (2B): leader backs up quickly over incorrect follower logs")
 
-	cfg.one(rand.Int(), servers, true)
+	cfg.one(1, servers, true)
 
 	// put leader and one follower in a partition
-	leader1 := cfg.checkOneLeader()
-	cfg.disconnect((leader1 + 2) % servers)
-	cfg.disconnect((leader1 + 3) % servers)
-	cfg.disconnect((leader1 + 4) % servers)
+	leader1 := cfg.checkOneLeader()         // 4
+	cfg.disconnect((leader1 + 2) % servers) // 1
+	cfg.disconnect((leader1 + 3) % servers) // 2
+	cfg.disconnect((leader1 + 4) % servers) // 3
 
 	// submit lots of commands that won't commit
 	for i := 0; i < 50; i++ {
-		cfg.rafts[leader1].Start(rand.Int())
+		// cfg.rafts[leader1].Start(rand.Int())
+		cfg.rafts[leader1].Start(100 + i)
 	}
+	// 4 leader1.commitIndex=1
+	// 4 leader1.logs = [1, 100..149]
 
 	time.Sleep(RaftElectionTimeout / 2)
 
-	cfg.disconnect((leader1 + 0) % servers)
-	cfg.disconnect((leader1 + 1) % servers)
+	cfg.disconnect((leader1 + 0) % servers) // 4
+	cfg.disconnect((leader1 + 1) % servers) // 0
 
 	// allow other partition to recover
-	cfg.connect((leader1 + 2) % servers)
-	cfg.connect((leader1 + 3) % servers)
-	cfg.connect((leader1 + 4) % servers)
+	cfg.connect((leader1 + 2) % servers) // 1
+	cfg.connect((leader1 + 3) % servers) // 2
+	cfg.connect((leader1 + 4) % servers) // 3
+
+	// now 4 & 0 have [1, 100..149], committed=[1]
+	// 1,2,3 have [1]
 
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
-		cfg.one(rand.Int(), 3, true)
+		// cfg.one(rand.Int(), 3, true)
+		cfg.one(200+i, 3, true)
 	}
+	// now 1,2,3 have [1, 200..249]
 
 	// now another partitioned leader and one follower
-	leader2 := cfg.checkOneLeader()
+	leader2 := cfg.checkOneLeader() // 2
 	other := (leader1 + 2) % servers
 	if leader2 == other {
 		other = (leader2 + 1) % servers
 	}
-	cfg.disconnect(other)
+	cfg.disconnect(other) // 1
 
 	// lots more commands that won't commit
 	for i := 0; i < 50; i++ {
-		cfg.rafts[leader2].Start(rand.Int())
+		// cfg.rafts[leader2].Start(rand.Int())
+		cfg.rafts[leader2].Start(300 + i)
 	}
 
 	time.Sleep(RaftElectionTimeout / 2)
+	// S0 = [1* 100..149]
+	// S1 = [1, 200..249*]
+	// S2 = [1, 200..249* 300..349]
+	// S3 = [1, 200..249* 300..349]
+	// S4 = [1* 100..149]
 
 	// bring original leader back to life,
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 	}
-	cfg.connect((leader1 + 0) % servers)
-	cfg.connect((leader1 + 1) % servers)
-	cfg.connect(other)
+	cfg.connect((leader1 + 0) % servers) // 4
+	cfg.connect((leader1 + 1) % servers) // 0
+	cfg.connect(other)                   // 1
+
+	cfg.checkOneLeader()
 
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
-		cfg.one(rand.Int(), 3, true)
+		// cfg.one(rand.Int(), 3, true)
+		cfg.one(400+i, 3, true)
 	}
 
 	// now everyone
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)
 	}
-	cfg.one(rand.Int(), servers, true)
+	cfg.one(500, servers, true)
 
 	cfg.end()
 }
@@ -612,6 +638,7 @@ loop:
 		starti, term, ok := cfg.rafts[leader].Start(1)
 		if !ok {
 			// leader moved on really quickly
+			dbg(dTest, "T0  S0", "leader moved on really quickly")
 			continue
 		}
 		cmds := []int{}
@@ -621,10 +648,12 @@ loop:
 			index1, term1, ok := cfg.rafts[leader].Start(x)
 			if term1 != term {
 				// Term changed while starting
+				dbg(dTest, "T0  S0", "Term changed while starting")
 				continue loop
 			}
 			if !ok {
 				// No longer the leader, so term has changed
+				dbg(dTest, "T0  S0", "No longer the leader, so term has changed")
 				continue loop
 			}
 			if starti+i != index1 {
@@ -637,6 +666,7 @@ loop:
 			if ix, ok := cmd.(int); ok == false || ix != cmds[i-1] {
 				if ix == -1 {
 					// term changed -- try again
+					dbg(dTest, "T0  S0", "term changed -- try again")
 					continue loop
 				}
 				t.Fatalf("wrong value %v committed for index %v; expected %v\n", cmd, starti+i, cmds)
@@ -655,6 +685,7 @@ loop:
 		}
 
 		if failed {
+			dbg(dTest, "T0  S0", "failed; term changed")
 			continue loop
 		}
 
