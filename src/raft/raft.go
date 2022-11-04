@@ -852,6 +852,7 @@ loop:
 	if rf.role == Candidate && yea > len(rf.peers)/2 { // 2/2, 2/3, 3/4
 		rf.role = Leader
 		rf.dbg(dVote, "Got decisive votes +%d/%d", yea, len(rf.peers))
+		rf.initializeNextIndex()
 	}
 	return false
 }
@@ -983,15 +984,12 @@ func (rf *Raft) broadcastHeartbeats() {
 
 // $5.3 When a leader "first" comes to power, it initializes all nextIndex
 // values to the index just after the last one in its log.
-// TODO: what does first mean?
-// func (rf *Raft) initializeNextIndex() {
-// 	rf.Lock()
-// 	idx := rf.state.getLastLogIndex()
-// 	for i := range rf.state.nextIndex {
-// 		rf.state.nextIndex[i] = idx
-// 	}
-// 	rf.Unlock()
-// }
+func (rf *Raft) initializeNextIndex() {
+	idx := rf.state.getLastLogIndex()
+	for i := range rf.state.nextIndex {
+		rf.state.nextIndex[i] = idx
+	}
+}
 
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
