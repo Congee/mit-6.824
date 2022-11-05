@@ -643,7 +643,14 @@ func (rf *Raft) loopForElection() {
 
 func (rf *Raft) loopHeartbeatsAsLeader() {
 	for !rf.killed() {
-		rf.broadcastHeartbeatsIfHeartbeatTimeoutAsLeader()
+		// Broadcast heartbeats as Leader if heartbeat times out.
+		//
+		// NOTE: broadcastHeartbeats shall not block.
+		// A peer may be quick to receive an RPC but slow to respond. If we wait
+		// for it to respond before sending the next heartbeat, it may timeout.
+		// XXX: Leader role checking is inside.
+		go rf.broadcastHeartbeats()
+
 		time.Sleep(HeartbeatInterval)
 	}
 }
@@ -770,7 +777,15 @@ func (rf *Raft) beginElectionIfTimeout(electionInterval *time.Duration) {
 		rf.dbg(dVote, "won")
 		rf.leaderId = rf.me
 		rf.Unlock()
-		rf.broadcastHeartbeatsAfterWinning()
+
+		// Broadcast heartbeats after winning.
+		//
+		// It is impossible for another RequestVoteRPC comes with a higher term
+		// because, 1) An RPC call will retry indefinitely if a receiver does not
+		// respond. 2) rf.role would already have been demoted to Follower given the
+		// receiver had a higher term.
+		// XXX: Leader role checking is inside.
+		go rf.broadcastHeartbeats()
 	} else {
 		rf.Unlock()
 	}
@@ -883,31 +898,6 @@ func (rf *Raft) broadcastRequestVote(reps chan<- RequestVoteReply) {
 	}
 	wg.Wait()
 	close(reps)
-}
-
-func (rf *Raft) broadcastHeartbeatsIfHeartbeatTimeoutAsLeader() {
-	if _, isleader := rf.GetState(); !isleader {
-		return
-	}
-
-	// NOTE: broadcastHeartbeats shall not block.
-	// A peer may be quick to receive an RPC but slow to respond. If we wait
-	// for it to respond before sending the next heartbeat, it may timeout.
-	go rf.broadcastHeartbeats()
-}
-
-// thread-safe
-func (rf *Raft) broadcastHeartbeatsAfterWinning() {
-	if _, isleader := rf.GetState(); !isleader {
-		return
-	}
-	// No data race here
-	//
-	// It is impossible for another RequestVoteRPC comes with a higher term
-	// because, 1) An RPC call will retry indefinitely if a receiver does not
-	// respond. 2) rf.role would already have been demoted to Follower given the
-	// receiver had a higher term.
-	go rf.broadcastHeartbeats()
 }
 
 func (rf *Raft) broadcastHeartbeats() {
