@@ -41,6 +41,7 @@ func (rf *Raft) campaign() {
 	rf.role = Candidate
 	rf.state.currentTerm.Add(1)
 	rf.voteFor(&rf.me)
+	rf.persist()
 	rf.resetTimer()
 
 	req := RequestVoteArgs{

@@ -10,6 +10,7 @@ import (
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 //
+// It shall be called on state changes of currentTerm, votedFor, and logs.
 // Specifically, `persist` shall be called on each state change. But there are
 // problems:
 //  1. multi-object state changes. TODO: not in this lab but do it in reality.

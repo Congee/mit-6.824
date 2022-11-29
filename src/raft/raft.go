@@ -21,10 +21,10 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/binary"
 	"math/rand"
+	"reflect"
+	"runtime"
 	"sync/atomic"
 	"time"
-	"runtime"
-	"reflect"
 
 	"6.824/labrpc"
 )
@@ -265,6 +265,7 @@ func (rf *Raft) handle(ev any) {
 
 	case TrySetCommitIndex:
 		if len(rf.trySetCommitIndex()) > 0 {
+			rf.persist()
 			rf.fire(TryApply{})
 		}
 

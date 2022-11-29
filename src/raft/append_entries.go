@@ -51,12 +51,7 @@ type AppendEntriesRep struct {
 
 func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntriesRep) {
 	term := rf.state.currentTerm.Load()
-	*rep = AppendEntriesRep{
-		term,
-		false,
-		0,
-		nil,
-	}
+	*rep = AppendEntriesRep{term, false, 0, nil}
 
 	// 1. $5.1 stale term from the sender.
 	//
@@ -76,6 +71,7 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 		rf.voteFor(nil)
 		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, req.Term)
 		rf.role = Follower
+		rf.persist()
 		return
 	}
 
@@ -86,6 +82,7 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 		rf.voteFor(nil)
 	}
 	rf.state.currentTerm.Store(req.Term)
+	rf.persist()
 
 	// $5.2
 	// If election timeout elapses without receiving AppendEntries RPC from
@@ -142,12 +139,14 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 	// 4. Append any new entries not already in the log
 	rf.dbg(dLog, "append %v++%v from=%v S%d", rf.state.logs, req.Entries[from:], from, req.LeaderId)
 	rf.state.logs = append(CloneSlice(rf.state.logs), req.Entries[from:]...)
+	rf.persist()
 
 	// 5. If leaderCommit > commitIndex,
 	// set commitIndex = min(leaderCommit, index of last new entry)
 	if req.LeaderCommit > rf.state.commitIndex {
 		rf.dbg(dCommit, "commitIndex <- %v", min(req.LeaderCommit, req.PrevLogIndex+len(req.Entries)))
 		rf.state.commitIndex = min(req.LeaderCommit, req.PrevLogIndex+len(req.Entries))
+		rf.persist()
 		rf.fire(TryApply{})
 	}
 
@@ -206,7 +205,7 @@ func (rf *Raft) makeAppendEntriesReq(srv int, empty bool) AppendEntriesReq {
 	return req
 }
 
-type AEResponse int
+type AEResponse uint8
 
 const (
 	AEStaleRPC AEResponse = iota
@@ -307,8 +306,10 @@ func (rf *Raft) broadcastHeartbeats(empty bool) {
 	var once sync.Once
 	var wg sync.WaitGroup
 
-	success := uint32(0)
-	for queue.Len() > 0 {
+	var deposed atomic.Bool
+	deposed.Store(false)
+	success := uint32(1)
+	for queue.Len() > 0 && !deposed.Load() {
 		srv := queue.PopFront()
 		await := make(chan AppendEntriesReq)
 		rf.fire(MakeAppendEntriesReq{srv, empty, await})
@@ -316,6 +317,8 @@ func (rf *Raft) broadcastHeartbeats(empty bool) {
 
 		wg.Add(1)
 		go func() {
+			defer wg.Done()
+
 			ch := make(chan AppendEntriesRep)
 			go func() { ch <- rf.sendAppendEntriesWrapper(srv, req) }()
 			rep := <-ch
@@ -326,16 +329,15 @@ func (rf *Raft) broadcastHeartbeats(empty bool) {
 
 			switch resp {
 			case AESuccess:
-				if int(atomic.AddUint32(&success, 1)) > len(rf.peers)/2-1 {
+				if int(atomic.AddUint32(&success, 1)) > len(rf.peers)/2 {
 					once.Do(func() { rf.fire(TrySetCommitIndex{}) })
 				}
 			case AEConflict:
 				queue.PushBack(srv)
 			case AEHigherTerm:
+				deposed.Store(true)
 			case AEStaleRPC:
 			}
-
-			wg.Done()
 		}()
 	}
 
