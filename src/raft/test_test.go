@@ -578,6 +578,8 @@ func TestBackup2B(t *testing.T) {
 	cfg.connect((leader1 + 1) % servers)  // 0
 	cfg.connect(other)  // 1
 
+	cfg.checkOneLeader()
+
 	// lots of successful commands to new group.
 	for i := 0; i < 50; i++ {
 		// cfg.one(rand.Int(), 3, true)
@@ -631,6 +633,7 @@ loop:
 		starti, term, ok := cfg.rafts[leader].Start(1)
 		if !ok {
 			// leader moved on really quickly
+			dbg(dTest, "T0  S0", "leader moved on really quickly")
 			continue
 		}
 		cmds := []int{}
@@ -640,10 +643,12 @@ loop:
 			index1, term1, ok := cfg.rafts[leader].Start(x)
 			if term1 != term {
 				// Term changed while starting
+				dbg(dTest, "T0  S0", "Term changed while starting")
 				continue loop
 			}
 			if !ok {
 				// No longer the leader, so term has changed
+				dbg(dTest, "T0  S0", "No longer the leader, so term has changed")
 				continue loop
 			}
 			if starti+i != index1 {
@@ -656,6 +661,7 @@ loop:
 			if ix, ok := cmd.(int); ok == false || ix != cmds[i-1] {
 				if ix == -1 {
 					// term changed -- try again
+					dbg(dTest, "T0  S0", "term changed -- try again")
 					continue loop
 				}
 				t.Fatalf("wrong value %v committed for index %v; expected %v\n", cmd, starti+i, cmds)
@@ -674,6 +680,7 @@ loop:
 		}
 
 		if failed {
+			dbg(dTest, "T0  S0", "failed; term changed")
 			continue loop
 		}
 

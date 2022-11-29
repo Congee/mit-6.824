@@ -1,7 +1,6 @@
 package raft
 
 import (
-	// "context"
 	"math/rand"
 	"strings"
 	"time"
@@ -29,6 +28,7 @@ func (rf *Raft) resetTimer() {
 }
 
 func (rf *Raft) campaign() {
+	assert(rf.role != Leader, "role changed to Leader when campaign()")
 	// $5.2
 	// • On conversion to candidate, start election:
 	//   • Increment currentTerm
@@ -37,6 +37,7 @@ func (rf *Raft) campaign() {
 	//   • Send RequestVote RPCs to all other servers
 	term := rf.state.currentTerm.Load()
 	rf.dbg(dVote, "role %s -> %s, term %d -> %d", rf.role, Candidate, term, term+1)
+	rf.fire(RoleChange{rf.role, Candidate})
 	// Do the same thing after split vote
 	rf.role = Candidate
 	rf.state.currentTerm.Add(1)
@@ -47,10 +48,11 @@ func (rf *Raft) campaign() {
 	req := RequestVoteArgs{
 		rf.state.currentTerm.Load(), // already incremented once
 		rf.me,
-		len(rf.state.logs),
+		len(rf.state.log),
 		rf.state.getLastLogTerm(),
 	}
 	go rf.poll(req, time.After(rf.ElectionInterval)) // either times out or wins
+	rf.dbg(dTimer, "poll timer to wait for %v", rf.ElectionInterval)
 }
 
 // Repeat until one of the three cases happens
@@ -59,8 +61,6 @@ func (rf *Raft) campaign() {
 //  2. Split vote
 //  3. Another candidate wins and sent a heartbeat
 func (rf *Raft) poll(req RequestVoteArgs, timer <-chan time.Time) {
-	rf.dbg(dTimer, "poll timer to wait for %v", rf.ElectionInterval)
-
 	// $5.5
 	// If a follower or candidate crashes, then future RequestVote and
 	// AppendEntries RPCs sent to it will fail. Raft handles these failures by
@@ -79,7 +79,8 @@ func (rf *Raft) poll(req RequestVoteArgs, timer <-chan time.Time) {
 		go func(srv int) {
 			rf.dbgt(dVote, req.Term, "-> S%d RequestVote-ing", srv)
 			rep := RequestVoteReply{}
-			for !rf.sendRequestVote(srv, &req, &rep) { // XXX: causes election timeout
+
+			for !rf.sendRequestVote(srv, &req, &rep) {
 				term := rf.state.currentTerm.Load()
 				if term > req.Term {
 					rf.dbgt(dDrop, req.Term, "-> S%d currterm=%v > req.Term=%v", srv, term, req.Term)
@@ -118,6 +119,7 @@ loop:
 			if rep.Term > term {
 				rf.mainrun(func() {
 					rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, rep.Term)
+					rf.fire(RoleChange{rf.role, Follower})
 					rf.role = Follower
 					rf.state.currentTerm.Store(rep.Term)
 					rf.persist()
@@ -190,10 +192,7 @@ func (rf *Raft) handleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 	term := rf.state.currentTerm.Load()
 	rf.dbgt(dVote, term, "<- S%d Vote Request of term %d", args.CandidateId, args.Term)
 
-	*reply = RequestVoteReply{
-		term,
-		false,
-	}
+	*reply = RequestVoteReply{term, false}
 
 	// 1. $5.1 stale term from the sender
 	if args.Term < term {
@@ -202,10 +201,12 @@ func (rf *Raft) handleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 
 	if args.Term > term {
 		rf.state.currentTerm.Store(args.Term)
+		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, args.Term)
+		rf.fire(RoleChange{rf.role, Follower})
 		rf.role = Follower
 		rf.voteFor(nil)
 		rf.persist()
-		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, args.Term)
+		// reply.Term = args.Term  TODO
 	}
 
 	grantVote := func() {
@@ -216,6 +217,8 @@ func (rf *Raft) handleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 		// If election timeout elapses without receiving AppendEntries RPC from
 		// current leader or granting vote to candidate: convert to candidate
 		rf.resetTimer()
+		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, args.Term)
+		rf.fire(RoleChange{rf.role, Follower})
 		rf.role = Follower
 		rf.dbg(dVote, "granted vote to S%d T%d", args.CandidateId, args.Term)
 	}
@@ -249,7 +252,7 @@ func (rf *Raft) handleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 	if rf.state.votedFor == nil || *rf.state.votedFor == args.CandidateId {
 		if args.LastLogTerm > rf.state.getLastLogTerm() {
 			grantVote()
-		} else if args.LastLogTerm == rf.state.getLastLogTerm() && args.LastLogIndex >= len(rf.state.logs) {
+		} else if args.LastLogTerm == rf.state.getLastLogTerm() && args.LastLogIndex >= len(rf.state.log) {
 			grantVote()
 		}
 	}
@@ -310,8 +313,8 @@ func (rf *Raft) sendRequestVote(
 }
 
 func (s *State) getLastLogTerm() int64 {
-	if len(s.logs) == 0 {
+	if len(s.log) == 0 {
 		return 0
 	}
-	return last(s.logs).Term
+	return last(s.log).Term
 }

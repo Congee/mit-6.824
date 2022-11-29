@@ -101,7 +101,8 @@ func (rf *Raft) Write(cmd Command) (index int, term int, isleader bool) {
 	// 	}
 	// }
 
-	rf.state.logs = append(rf.state.logs, Log{int64(term), cmd})
+	entry := Entry{len(rf.state.log) + 1, int64(term), cmd}
+	rf.state.log = append(rf.state.log, entry)
 	rf.state.nextIndex[rf.me]++
 	rf.state.matchIndex[rf.me]++
 

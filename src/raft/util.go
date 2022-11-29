@@ -21,7 +21,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 func (r Role) String() string {
-	return [...]string{"Follower", "Candidate", "Leader"}[r]
+	return [...]string{"Follower", "PreCandidate", "Candidate", "Leader"}[r]
 }
 
 func (cmd Command) GoString() string {
@@ -35,10 +35,14 @@ func (cmd Command) String() string {
 	return fmt.Sprintf("%v", cmd.Value)
 }
 
+func (rc RoleChange) String() string {
+	return fmt.Sprintf("{from:%v to:%v}", rc.from, rc.to)
+}
+
 func (s State) String() string {
 	voted := func() any {
 		if s.votedFor == nil {
-			return "nil"
+			return "<nil>"
 		} else {
 			return *s.votedFor
 		}
@@ -47,7 +51,7 @@ func (s State) String() string {
 		"{currentTerm:%d, votedFor:%v, logs:%+v, commitIndex:%d, lastApplied:%d, nextIndex:%v, matchIndex:%v}",
 		s.currentTerm.Load(),
 		voted,
-		s.logs,
+		s.log,
 		s.commitIndex,
 		s.lastApplied,
 		s.nextIndex,
@@ -66,10 +70,6 @@ func (rf Raft) String() string {
 		rf.role,
 		rf.leaderId,
 	)
-}
-
-func (m MakeAppendEntriesReq) String() string {
-	return fmt.Sprintf("{srv: %v, empty: %t}", m.srv, m.empty)
 }
 
 func (h HandleAppendEntriesReq) String() string {
@@ -227,4 +227,14 @@ func CloneSlice[S ~[]E, E any](s S) S {
 		return nil
 	}
 	return append(S([]E{}), s...)
+}
+
+func assert(exp bool, args ...any) {
+	if !exp {
+		if len(args) > 0 {
+			panic(args)
+		} else {
+			panic("assertion failed")
+		}
+	}
 }

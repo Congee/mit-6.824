@@ -166,10 +166,10 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 // contents
 func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 	rf := cfg.rafts[i]
-	rf.dbg(dTest, "applier on i=%d applyCh=%v", i, applyCh)
+	rf.dbg(dTest, "starting applier on i=%d applyCh=%v", i, applyCh)
 
 	for m := range applyCh {
-		rf.dbg(dTest, "applier rcvd msg=%v", m)
+		rf.dbg(dTest, "applier rcvd msg=%+v", m)
 		if m.CommandValid == false {
 			// ignore other types of ApplyMsg
 		} else {
@@ -508,22 +508,13 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			cfg.t.Fatal(cfg.applyErr[i])
 		}
 
-		done := make(chan State)
-		cfg.rafts[i].fire(ReadStateByTest{done})
-		state := <-done
-
 		cfg.mu.Lock()
 		cmd1, ok := cfg.logs[i][index]
 
-		rf := cfg.rafts[i]
-		rf.dbg(
-			dTest,
-			"finding log@%v=%v logs=%v test_logs=%v",
-			index,
-			ok,
-			state.logs,
-			cfg.logs[i],
-		)
+		if cfg.rafts[i] != nil {
+			rf := cfg.rafts[i]
+			rf.dbg(dTest, "finding log[%v]=%v test_log=%v", index, ok, cfg.logs[i])
+		}
 
 		cfg.mu.Unlock()
 
@@ -583,6 +574,8 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // if retry==false, calls Start() only once, in order
 // to simplify the early Lab 2B tests.
 func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
+	dbg(dTest, "T0  S0 one(%v, servers=%v, retry=%t)", cmd, expectedServers, retry)
+
 	t0 := time.Now()
 	starts := 0
 	var rf *Raft

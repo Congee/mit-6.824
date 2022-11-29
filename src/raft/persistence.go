@@ -30,7 +30,7 @@ func (rf *Raft) persist() {
 	// Persistent
 	e.Encode(rf.state.currentTerm.Load())
 	e.Encode(votedFor)
-	e.Encode(rf.state.logs)
+	e.Encode(rf.state.log)
 
 	// Volatile
 	e.Encode(rf.state.commitIndex)
@@ -53,7 +53,7 @@ func (rf *Raft) readPersist(data []byte) {
 	// Persistent
 	var currentTerm int64
 	var votedFor int
-	var logs []Log
+	var logs []Entry
 
 	// Volatile
 	var commitIndex int
@@ -72,7 +72,7 @@ func (rf *Raft) readPersist(data []byte) {
 		} else {
 			rf.state.votedFor = &votedFor
 		}
-		rf.state.logs = logs
+		rf.state.log = logs
 
 		rf.state.commitIndex = commitIndex
 		rf.state.lastApplied = lastApplied

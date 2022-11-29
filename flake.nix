@@ -22,10 +22,12 @@
             pkgs.delve
 
             pkgs.lnav
+						pkgs.graphviz-nox
 
             pkgs.python310
             pkgs.python310Packages.rich
             pkgs.python310Packages.typer
+            pkgs.python310Packages.ipdb
           ];
         };
       });

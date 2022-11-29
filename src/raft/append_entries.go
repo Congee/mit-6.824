@@ -1,9 +1,13 @@
 package raft
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"6.824/stack"
 )
 
 type AppendEntriesReq struct {
@@ -13,7 +17,7 @@ type AppendEntriesReq struct {
 	// to the peer yet to receive log entries as described in nextIndex[]. $5.3
 	PrevLogIndex int
 	PrevLogTerm  int64
-	Entries      []Log
+	Entries      []Entry
 	LeaderCommit int // leader's commitIndex
 }
 
@@ -70,18 +74,20 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 		rf.state.currentTerm.Store(req.Term)
 		rf.voteFor(nil)
 		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, req.Term)
+		rf.fire(RoleChange{rf.role, Follower})
 		rf.role = Follower
 		rf.persist()
-		return
 	}
 
 	if rf.role == Candidate {
 		// $5.2 If AppendEntries RPC received from new leader: convert to follower
 		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, req.Term)
+		rf.fire(RoleChange{rf.role, Follower})
 		rf.role = Follower
 		rf.voteFor(nil)
 	}
 	rf.state.currentTerm.Store(req.Term)
+	// rep.Term = req.Term  TODO
 	rf.persist()
 
 	// $5.2
@@ -103,13 +109,13 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 	//     * - p - -
 	if req.PrevLogIndex == 0 {
 		// It matches in case of the initial heartbeat
-	} else if req.PrevLogIndex > len(rf.state.logs) {
-		rep.ConflictIndex = len(rf.state.logs)
+	} else if req.PrevLogIndex > len(rf.state.log) {
+		rep.ConflictIndex = len(rf.state.log)
 		rep.ConflictTerm = nil
 		return
-	} else if rf.state.logs[req.PrevLogIndex-1].Term != req.PrevLogTerm {
-		rep.ConflictTerm = &rf.state.logs[req.PrevLogIndex-1].Term
-		for i := req.PrevLogIndex; i >= 1 && rf.state.logs[i-1].Term == *rep.ConflictTerm; i-- {
+	} else if rf.state.log[req.PrevLogIndex-1].Term != req.PrevLogTerm {
+		rep.ConflictTerm = &rf.state.log[req.PrevLogIndex-1].Term
+		for i := req.PrevLogIndex; i >= 1 && rf.state.log[i-1].Term == *rep.ConflictTerm; i-- {
 			rep.ConflictIndex = i
 		}
 		return
@@ -128,17 +134,17 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 	// 1 1 1 3 4   -- same
 	//       ___
 	for idx := len(req.Entries) - 1; idx >= 0; idx-- { // In case of an outdated AppendEntries
-		if len(rf.state.logs) <= idx+req.PrevLogIndex { // TODO: optimzie to O(1)
+		if len(rf.state.log) <= idx+req.PrevLogIndex { // TODO: optimzie to O(1)
 			from = idx
-		} else if rf.state.logs[idx+req.PrevLogIndex].Term != req.Entries[idx].Term {
-			rf.state.logs = rf.state.logs[:idx+req.PrevLogIndex]
+		} else if rf.state.log[idx+req.PrevLogIndex].Term != req.Entries[idx].Term {
+			rf.state.log = rf.state.log[:idx+req.PrevLogIndex]
 			from = idx
 		}
 	}
 
 	// 4. Append any new entries not already in the log
-	rf.dbg(dLog, "append %v++%v from=%v S%d", rf.state.logs, req.Entries[from:], from, req.LeaderId)
-	rf.state.logs = append(CloneSlice(rf.state.logs), req.Entries[from:]...)
+	rf.dbg(dLog, "append %v++%v from=%v S%d", rf.state.log, req.Entries[from:], from, req.LeaderId)
+	rf.state.log = append(CloneSlice(rf.state.log), req.Entries[from:]...)
 	rf.persist()
 
 	// 5. If leaderCommit > commitIndex,
@@ -172,11 +178,11 @@ func (rf *Raft) makeAppendEntriesReq(srv int, empty bool) AppendEntriesReq {
 	term := rf.state.currentTerm.Load()
 	// Index of log entry immediately preceding new ones
 	previdx, prevterm := func(nxt int) (int, int64) {
-		if len(rf.state.logs) == 0 || nxt == 1 {
+		if len(rf.state.log) == 0 || nxt == 1 {
 			return 0, 0
 		}
 
-		return nxt - 1, rf.state.logs[nxt-2].Term
+		return nxt - 1, rf.state.log[nxt-2].Term
 	}(rf.state.nextIndex[srv])
 
 	req := AppendEntriesReq{
@@ -184,10 +190,10 @@ func (rf *Raft) makeAppendEntriesReq(srv int, empty bool) AppendEntriesReq {
 		rf.me,
 		previdx,
 		prevterm,
-		make([]Log, 0),
+		make([]Entry, 0),
 		rf.state.commitIndex,
 	}
-	lastidx := len(rf.state.logs)
+	lastidx := len(rf.state.log)
 
 	// • If last log index ≥ nextIndex for a follower: send AppendEntries RPC
 	//   with log entries starting at nextIndex
@@ -199,11 +205,47 @@ func (rf *Raft) makeAppendEntriesReq(srv int, empty bool) AppendEntriesReq {
 		// 1 1 *1* 2
 		//     nxt last
 		// No out of bound error here as lastidx(0) >= 1 won't stand
-		req.Entries = rf.state.logs[rf.state.nextIndex[srv]-1:]
+		req.Entries = rf.state.log[rf.state.nextIndex[srv]-1:]
 	}
 
 	return req
 }
+
+// func (rf *Raft) makeAppendEntriesReq(srv int, empty bool) AppendEntriesReq {
+// 	assert(rf.role == Leader)
+// 	req := AppendEntriesReq{
+// 		rf.state.currentTerm.Load(),
+// 		rf.me,
+// 		rf.state.nextIndex[srv] - 1, // Index of log entry immediately preceding new ones
+// 		0,
+// 		make([]Log, 0),
+// 		rf.state.commitIndex,
+// 	}
+// 	if req.PrevLogIndex != 0 {
+// 		req.PrevLogTerm = rf.state.logs[req.PrevLogIndex-1].Term
+// 	}
+//
+// 	if empty {
+// 		return req
+// 	}
+//
+// 	// • If last log index ≥ nextIndex for a follower: send AppendEntries RPC
+// 	//   with log entries starting at nextIndex
+// 	//   • If successful: update nextIndex and matchIndex for follower (§5.3)
+// 	//   • If AppendEntries fails because of log inconsistency: decrement
+// 	//     nextIndex and retry (§5.3)
+// 	lastidx := len(rf.state.logs)
+// 	if lastidx >= rf.state.nextIndex[srv] {
+// 		// 0 1  2  3
+// 		// 1 1 *1* 2
+// 		//     nxt last
+// 		// No out of bound error here as lastidx(0) >= 1 won't stand
+// 		assert(rf.role == Leader)
+// 		req.Entries = rf.state.logs[rf.state.nextIndex[srv]-1:]
+// 	}
+//
+// 	return req
+// }
 
 type AEResponse uint8
 
@@ -228,7 +270,7 @@ func (rf *Raft) handleAppendEntriesRep(
 
 	// Drop replis sent from an old term
 	if req.Term != term {
-		rf.dbg(dDrop, "rcvd stale AppendEntriesRep of term %d", term)
+		rf.dbg(dDrop, "rcvd stale AppendEntriesRep of %v", req)
 		return AEStaleRPC
 	}
 
@@ -236,6 +278,7 @@ func (rf *Raft) handleAppendEntriesRep(
 	if rep.Term > term {
 		rf.state.currentTerm.Store(rep.Term)
 		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, rep.Term)
+		rf.fire(RoleChange{rf.role, Follower})
 		rf.role = Follower
 		rf.voteFor(nil) // the peer may or may not be a leader
 		rf.persist()
@@ -245,11 +288,11 @@ func (rf *Raft) handleAppendEntriesRep(
 	if rf.role == Leader { // in case of leadership change but no term change
 		// Decrement and retry on inconsistency
 		if !rep.Success {
-			rf.dbgt(dLeader, term, "-> S%d rep.Failure w/ %v <- T%d nxt=%d rep=%+v", srv, req.Entries, rep.Term, rf.state.nextIndex[srv], rep)
+			rf.dbgt(dLog, term, "-> S%d rep.Failure w/ %v <- T%d nxt=%d rep=%+v", srv, req.Entries, rep.Term, rf.state.nextIndex[srv], rep)
 
 			if rep.ConflictTerm != nil {
-				for i := len(rf.state.logs); i >= 1; i-- {
-					if rf.state.logs[i-1].Term == *rep.ConflictTerm {
+				for i := len(rf.state.log); i >= 1; i-- {
+					if rf.state.log[i-1].Term == *rep.ConflictTerm {
 						rf.state.nextIndex[srv] = i + 1
 						break
 					}
@@ -257,10 +300,10 @@ func (rf *Raft) handleAppendEntriesRep(
 			} else {
 				rf.state.nextIndex[srv] = rep.ConflictIndex
 			}
-			rf.dbgt(dLeader, term, "Conclicting req=%+v after state=%s", req, rf.state)
+			rf.dbgt(dLog, term, "Conclicting req=%+v after state=%s", req, rf.state)
 			return AEConflict
 		}
-		rf.dbgt(dLeader, term, "-> S%d rep.Success w/ %v <- T%d nxt=%d", srv, req.Entries, rep.Term, rf.state.nextIndex[srv])
+		rf.dbgt(dLog, term, "-> S%d rep.Success w/ %v <- T%d nxt=%d", srv, req.Entries, rep.Term, rf.state.nextIndex[srv])
 
 		// Successful
 		// 1 2 3 4 5
@@ -279,49 +322,61 @@ func (rf *Raft) handleAppendEntriesRep(
 	return AEStaleRPC
 }
 
-func (rf *Raft) sendAppendEntriesWrapper(srv int, req AppendEntriesReq) AppendEntriesRep {
+func (rf *Raft) sendAppendEntriesWrapper(
+	ctx context.Context,
+	srv int,
+	req AppendEntriesReq,
+) (AppendEntriesRep, error) {
 	rf.dbgt(dLeader, req.Term, "-> S%d sending AppendEntries %+v", srv, req)
 
 	rep := AppendEntriesRep{}
-	for !rf.sendAppendEntries(srv, &req, &rep) && rf.state.currentTerm.Load() == req.Term {
-		rf.dbgt(dDrop, req.Term, "-> S%d failed  AppendEntries; retrying...", srv)
-		time.Sleep(30 * time.Millisecond) // XXX: because of capped RPCs/s
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			return rep, errors.New("cancelled")
+		default:
+			if rf.sendAppendEntries(srv, &req, &rep) || rf.state.currentTerm.Load() != req.Term {
+				break loop
+			} else {
+				rf.dbgt(dDrop, req.Term, "-> S%d failed  AppendEntries; retrying...", srv)
+				time.Sleep(30 * time.Millisecond) // XXX: because of capped RPCs/s
+			}
+		}
 	}
 
-	rf.dbgt(dLeader, req.Term, "-> S%d sent    AppendEntries", srv)
-	return rep
+	rf.dbgt(dLeader, req.Term, "-> S%d sent    AppendEntries rep=%+v", srv, rep)
+	return rep, nil
 }
 
 // @empty bool:
 //
 //	true for initial heartbeats after winning election;
 //	false means regular heartbeats
-func (rf *Raft) broadcastHeartbeats(empty bool) {
-	// TODO: cancellation
-	queue := NewQueue[int]()
-	for _, srv := range rf.Others() {
-		queue.PushBack(srv)
-	}
-
+func (rf *Raft) broadcastHeartbeats(ctx context.Context, empty bool) {
 	var once sync.Once
-	var wg sync.WaitGroup
-
 	var deposed atomic.Bool
 	deposed.Store(false)
 	success := uint32(1)
-	for queue.Len() > 0 && !deposed.Load() {
-		srv := queue.PopFront()
-		await := make(chan AppendEntriesReq)
-		rf.fire(MakeAppendEntriesReq{srv, empty, await})
-		req := <-await
 
-		wg.Add(1)
+	stack := stack.From[int](rf.Others())
+	for stack.Len() > 0 && !deposed.Load() {
+		srv := stack.Pop()
+
+		req := rf.makeAppendEntriesReq(srv, empty)
 		go func() {
-			defer wg.Done()
-
 			ch := make(chan AppendEntriesRep)
-			go func() { ch <- rf.sendAppendEntriesWrapper(srv, req) }()
-			rep := <-ch
+			go func() {
+				if rep, err := rf.sendAppendEntriesWrapper(ctx, srv, req); err != nil {
+					close(ch)
+				} else {
+					ch <- rep
+				}
+			}()
+			rep, ok := <-ch
+			if !ok { // cancelled
+				return
+			}
 
 			done := make(chan AEResponse)
 			rf.fire(HandleAppendEntriesRep{srv, &req, &rep, done})
@@ -333,7 +388,7 @@ func (rf *Raft) broadcastHeartbeats(empty bool) {
 					once.Do(func() { rf.fire(TrySetCommitIndex{}) })
 				}
 			case AEConflict:
-				queue.PushBack(srv)
+				stack.Push(srv)
 			case AEHigherTerm:
 				deposed.Store(true)
 			case AEStaleRPC:
@@ -344,6 +399,4 @@ func (rf *Raft) broadcastHeartbeats(empty bool) {
 	// NOTE: still needed here because replication can happen across multiple
 	// rounds of heartbeats
 	rf.fire(TrySetCommitIndex{})
-
-	wg.Wait()
 }

@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"context"
 	cryptorand "crypto/rand"
 	"encoding/binary"
 	"math/rand"
@@ -54,13 +55,19 @@ type Role uint8
 
 const (
 	Follower Role = iota
+	PreCandidate
 	Candidate
 	Leader
 )
 
-// must satisfy broadcastTime ≪ electionTimeout ≪ MTBF
-const ElectionTimeoutBase = 350 * time.Millisecond // < 10rqs
+// Must satisfy broadcastTime ≪ electionTimeout ≪ MTBF
+const ElectionTimeoutBase = 350 * time.Millisecond
+
+// < 10rqs
 const HeartbeatInterval = 150 * time.Millisecond
+
+// Max number of flights for each peer
+const FlightsCap = 50
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
@@ -94,11 +101,13 @@ type Raft struct {
 
 	// Received by the tester
 	applyCh chan<- ApplyMsg
+
+	AppendEntriesCancels []context.CancelFunc
+	RequestVoteCancels   []context.CancelFunc
 }
 
-// TODO: Each log entry also has an integer index identifying its position in
-// the log.
-type Log struct {
+type Entry struct {
+	Index int
 	// Used to detect inconsistencies between logs and to ensure some properties
 	Term int64
 	// <nil> means no-op
@@ -121,7 +130,7 @@ type State struct {
 
 	// `candidateId` voted for in current *term*, nullable.
 	votedFor *int
-	logs     []Log
+	log      []Entry
 
 	// ------------- volatile on all ------------------
 
@@ -191,6 +200,12 @@ func (rf *Raft) mainrun(thunk func()) {
 	<-done
 }
 
+func (rf *Raft) cancelrpcs(fns []context.CancelFunc) {
+	for _, cancel := range fns {
+		cancel()
+	}
+}
+
 // start as a follower ... no communication (election timeout) ... then election
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -203,13 +218,14 @@ func (rf *Raft) ticker() {
 	for !rf.killed() {
 		select {
 		case <-rf.killch:
-			// TODO: cancel ongoing goroutines, if any
 			for range rf.bus {
 			}
+			rf.cancelrpcs(rf.AppendEntriesCancels)
+			rf.cancelrpcs(rf.RequestVoteCancels)
 			return
 		case <-rf.ElectionTimer.C:
 			rf.dbg(dTimer, "electiontimeout after %v", rf.ElectionInterval)
-			rf.fire(ElectionTimeout{})
+			rf.fire(ElectionTimeout{rf.state.currentTerm.Load()})
 		case <-rf.tick.C:
 			rf.dbg(dTimer, "tick")
 			if rf.role == Leader {
@@ -237,22 +253,38 @@ func (rf *Raft) handle(ev any) {
 		}{int(rf.state.currentTerm.Load()), rf.role == Leader}
 
 	case WonElection:
-		rf.role = Leader
-		rf.leaderId = rf.me
-		rf.initializeNextMatchIndex()
-		rf.fire(BroadcastHeatbeats{empty: true})
+		if rf.role == Candidate {
+			rf.fire(RoleChange{rf.role, Leader})
+			rf.role = Leader
+			rf.leaderId = rf.me
+			rf.initializeNextMatchIndex()
+			rf.fire(BroadcastHeatbeats{empty: true})
+		}
+
+	case RoleChange:
+		switch ev.from {
+		case Candidate:
+			rf.cancelrpcs(rf.RequestVoteCancels)
+		case Leader:
+			rf.cancelrpcs(rf.AppendEntriesCancels)
+		}
 
 	case ElectionTimeout:
-		done := make(chan struct{})
-		go func() {
+		if rf.role != Leader && ev.term == rf.state.currentTerm.Load() {
+			_, cancel := context.WithCancel(context.Background()) // TODO: delete unused me
+			rf.RequestVoteCancels = append(rf.RequestVoteCancels, cancel)
 			rf.campaign()
-			done <- struct{}{}
-		}()
-		<-done
+		}
 
 	case BroadcastHeatbeats:
-		go rf.broadcastHeartbeats(ev.empty)
-		rf.tick.Reset(HeartbeatInterval)
+		rf.cancelrpcs(rf.AppendEntriesCancels)
+
+		if rf.role == Leader {
+			ctx, cancel := context.WithCancel(context.Background())
+			rf.AppendEntriesCancels = append(rf.AppendEntriesCancels, cancel)
+			rf.broadcastHeartbeats(ctx, ev.empty)
+			rf.tick.Reset(HeartbeatInterval)
+		}
 
 	case ReadRequest:
 	case WriteRequest:
@@ -271,9 +303,6 @@ func (rf *Raft) handle(ev any) {
 
 	case TryApply:
 		rf.tryApply()
-
-	case MakeAppendEntriesReq:
-		ev.done <- rf.makeAppendEntriesReq(ev.srv, ev.empty)
 
 	case HandleAppendEntriesReq:
 		rf.handleAppendEntriesReq(ev.req, ev.rep)
@@ -299,7 +328,7 @@ func (rf *Raft) handle(ev any) {
 // goes from 3 to 5, [4,5] will be the result
 func (rf *Raft) trySetCommitIndex() []int {
 	term := rf.state.currentTerm.Load()
-	logs := rf.state.logs
+	logs := rf.state.log
 
 	rf.dbg(
 		dCommit,
@@ -339,7 +368,7 @@ func (rf *Raft) tryApply() []int {
 	applied := []int{}
 	for rf.state.commitIndex > rf.state.lastApplied {
 		rf.state.lastApplied++
-		cmd := rf.state.logs[rf.state.lastApplied-1].Command
+		cmd := rf.state.log[rf.state.lastApplied-1].Command
 		cmdidx := rf.state.lastApplied
 		applied = append(applied, cmdidx)
 
@@ -348,7 +377,7 @@ func (rf *Raft) tryApply() []int {
 			Command:      cmd.Value,
 			CommandIndex: cmdidx,
 		}
-		// rf.applier.collect(msg)
+		rf.dbg(dLog, "applyin cmd=%v @ %v", msg.Command, rf.state.lastApplied)
 		rf.applyCh <- msg // XXX: linearizable writes in tests
 		rf.dbg(dLog, "applied cmd=%v @ %v", msg.Command, rf.state.lastApplied)
 	}
@@ -358,7 +387,7 @@ func (rf *Raft) tryApply() []int {
 // $5.3 When a leader "first" comes to power, it initializes all nextIndex
 // values to the index just after the last one in its log.
 func (rf *Raft) initializeNextMatchIndex() {
-	idx := len(rf.state.logs)
+	idx := len(rf.state.log)
 	for i := range rf.peers {
 		rf.state.nextIndex[i] = idx + 1
 		rf.state.matchIndex[i] = 0

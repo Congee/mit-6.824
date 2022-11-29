@@ -7,19 +7,8 @@ type (
 			isleader bool
 		}
 	}
-	ElectionTimeout    struct{}
+	ElectionTimeout    struct{ term int64 }
 	BroadcastHeatbeats struct{ empty bool }
-	SendAppendEntries  struct {
-		srv int
-		req *AppendEntriesReq
-		rep *AppendEntriesRep
-	}
-	SentAppendEntries    struct{}
-	MakeAppendEntriesReq struct {
-		srv   int
-		empty bool
-		done  chan AppendEntriesReq
-	}
 	HandleAppendEntriesReq struct {
 		req  *AppendEntriesReq
 		rep  *AppendEntriesRep
@@ -50,5 +39,9 @@ type (
 		file string
 		line int
 		done chan struct{}
+	}
+	RoleChange struct {
+		from Role
+		to   Role
 	}
 )
