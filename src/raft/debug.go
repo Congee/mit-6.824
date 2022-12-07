@@ -88,6 +88,6 @@ func (rf *Raft) dbg(topic logTopic, format string, args ...any) {
 
 // dbg with term because term may change before and after sending an RPC
 func (rf *Raft) dbgt(topic logTopic, term int64, format string, args ...any) {
-	prefix := fmt.Sprintf("T%-2d S%d ", term, rf.me)
+	prefix := fmt.Sprintf("T%-3d S%d ", term, rf.me)
 	dbg(topic, prefix+format, args...)
 }

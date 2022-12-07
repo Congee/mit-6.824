@@ -80,6 +80,20 @@ func (h HandleRequestVote) String() string {
 	return fmt.Sprintf("{req: %+v, rep: %+v}", h.req, h.rep)
 }
 
+func (rep AppendEntriesRep) String() string {
+	cfterm := func() any {
+		if rep.ConflictTerm == nil {
+			return "<nil>"
+		} else {
+			return *rep.ConflictTerm
+		}
+	}()
+
+	return fmt.Sprintf("{Term:%v Success:%t ConflictIndex:%d ConflictTerm:%v}",
+		rep.Term, rep.Success, rep.ConflictIndex, cfterm,
+	)
+}
+
 func (h HandleAppendEntriesRep) String() string {
 	return fmt.Sprintf("{srv: %v, req: %+v, rep: %+v}", h.srv, h.req, h.rep)
 }

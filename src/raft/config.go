@@ -110,6 +110,7 @@ func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
 
 // shut down a Raft server but save its persistent state.
 func (cfg *config) crash1(i int) {
+	dbg(dTest, "T0   S%d crash1(%d)", i, i)
 	cfg.disconnect(i)
 	cfg.net.DeleteServer(i) // disable client connections to the server.
 
@@ -140,9 +141,9 @@ func (cfg *config) crash1(i int) {
 	}
 }
 
+// check and store a log entry
 func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
-	rf := cfg.rafts[i]
-	rf.dbg(dTest, "checkLogs i=%d m=%v", i, m)
+	dbg(dTest, "T0   S%d checkLogs m=%+v", i, m)
 
 	err_msg := ""
 	v := m.Command
@@ -165,8 +166,10 @@ func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 // applier reads message from apply ch and checks that they match the log
 // contents
 func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
+	dbg(dTest, "T0   S%d starting applier on applyCh=%v", i, applyCh)
+	cfg.mu.Lock()
 	rf := cfg.rafts[i]
-	rf.dbg(dTest, "starting applier on i=%d applyCh=%v", i, applyCh)
+	cfg.mu.Unlock()
 
 	for m := range applyCh {
 		rf.dbg(dTest, "applier rcvd msg=%+v", m)
@@ -283,6 +286,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 // state persister, to isolate previous instance of
 // this server. since we cannot really kill it.
 func (cfg *config) start1(i int, applier func(int, chan ApplyMsg)) {
+	dbg(dTest, "T0   S%d start1(%d)", i, i)
 	cfg.crash1(i)
 
 	// a fresh set of outgoing ClientEnd names.
@@ -366,7 +370,7 @@ func (cfg *config) cleanup() {
 
 // attach server i to the net.
 func (cfg *config) connect(i int) {
-	dbg(dTest, "T0  S%d connect()", i)
+	dbg(dTest, "T0   S%d connect()", i)
 	// fmt.Printf("connect(%d)\n", i)
 
 	cfg.connected[i] = true
@@ -390,7 +394,7 @@ func (cfg *config) connect(i int) {
 
 // detach server i from the net.
 func (cfg *config) disconnect(i int) {
-	dbg(dTest, "T0  S%d disconnect()", i)
+	dbg(dTest, "T0   S%d disconnect()", i)
 	// fmt.Printf("disconnect(%d)\n", i)
 
 	cfg.connected[i] = false
@@ -533,6 +537,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 // wait for at least n servers to commit.
 // but don't wait forever.
 func (cfg *config) wait(index int, n int, startTerm int) interface{} {
+	dbg(dTest, "T0   S0 wait(index=%v, n=%v, startTerm=%v)", index, n, startTerm)
 	to := 10 * time.Millisecond
 	for iters := 0; iters < 30; iters++ {
 		nd, _ := cfg.nCommitted(index)
@@ -574,7 +579,7 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // if retry==false, calls Start() only once, in order
 // to simplify the early Lab 2B tests.
 func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
-	dbg(dTest, "T0  S0 one(%v, servers=%v, retry=%t)", cmd, expectedServers, retry)
+	dbg(dTest, "T0   S0 one(%v, servers=%v, retry=%t)", cmd, expectedServers, retry)
 
 	t0 := time.Now()
 	starts := 0

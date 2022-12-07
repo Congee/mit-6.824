@@ -3,5 +3,10 @@
 # @description: Nope
 #
 
-:filter-out tick
-:filter-out retrying
+# mark the last log message where a server became Leader
+# mark the last applied cmd
+# ;update all_logs set log_mark = 1 where log_line = (select max(log_line) from all_logs where log_body like "%to:Leader%" or log_body like "%S_ applied%")
+
+
+:filter-out tick$
+:filter-out retrying...$

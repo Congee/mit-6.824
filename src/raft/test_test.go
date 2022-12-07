@@ -150,7 +150,7 @@ func TestBasicAgree2B(t *testing.T) {
 			t.Fatalf("some have committed before Start()")
 		}
 
-    dbg(dTest, "S0 T0 cfg.one(index=%v, servers=%v, retry=%v)", index*100, servers, false)
+		dbg(dTest, "S0 T0 cfg.one(index=%v, servers=%v, retry=%v)", index*100, servers, false)
 		xindex := cfg.one(index*100, servers, false)
 		if xindex != index {
 			t.Fatalf("got index %v but expected %v", xindex, index)
@@ -419,10 +419,10 @@ loop:
 		cmds := []int{}
 		for index := range is {
 			cmd := cfg.wait(index, servers, term)
-      if cmd.(int) != -1 {
-        cfg.rafts[leader].dbg(dTest, "cmd=%v=wait(index=%v)", cmd, index)
-        cfg.rafts[leader].dbg(dTest, "append(cmd=%v, ix=%v)", cmds, cmd)
-      }
+			if cmd.(int) != -1 {
+				cfg.rafts[leader].dbg(dTest, "cmd=%v=wait(index=%v)", cmd, index)
+				cfg.rafts[leader].dbg(dTest, "append(cmd=%v, ix=%v)", cmds, cmd)
+			}
 			if ix, ok := cmd.(int); ok {
 				if ix == -1 {
 					// peers have moved on to later terms
@@ -446,10 +446,10 @@ loop:
 			continue
 		}
 
-    // cmds should be [1, 100, 101, 102, 103, 104] + [<nil>, ...]
+		// cmds should be [1, 100, 101, 102, 103, 104] + [<nil>, ...]
 		for x := 100; x < 100+iters; x++ {
 			ok := false
-      for j := 0; j < len(cmds); j++ {  // ok := cmds.Contains(x)
+			for j := 0; j < len(cmds); j++ { // ok := cmds.Contains(x)
 				if cmds[j] == x {
 					ok = true
 				}
@@ -481,7 +481,7 @@ func TestRejoin2B(t *testing.T) {
 
 	// leader network failure
 	leader1 := cfg.checkOneLeader()
-  cfg.rafts[leader1].dbg(dTest, "disconnect")
+	cfg.rafts[leader1].dbg(dTest, "disconnect")
 	cfg.disconnect(leader1)
 
 	// make old leader try to agree on some entries
@@ -494,11 +494,11 @@ func TestRejoin2B(t *testing.T) {
 
 	// new leader network failure
 	leader2 := cfg.checkOneLeader()
-  cfg.rafts[leader2].dbg(dTest, "disconnect")
+	cfg.rafts[leader2].dbg(dTest, "disconnect")
 	cfg.disconnect(leader2)
 
 	// old leader connected again
-  cfg.rafts[leader1].dbg(dTest, "connect")
+	cfg.rafts[leader1].dbg(dTest, "connect")
 	cfg.connect(leader1)
 
 	cfg.one(104, 2, true)
@@ -638,7 +638,7 @@ loop:
 		starti, term, ok := cfg.rafts[leader].Start(1)
 		if !ok {
 			// leader moved on really quickly
-			dbg(dTest, "T0  S0", "leader moved on really quickly")
+			dbg(dTest, "T0   S0", "leader moved on really quickly")
 			continue
 		}
 		cmds := []int{}
@@ -648,12 +648,12 @@ loop:
 			index1, term1, ok := cfg.rafts[leader].Start(x)
 			if term1 != term {
 				// Term changed while starting
-				dbg(dTest, "T0  S0", "Term changed while starting")
+				dbg(dTest, "T0   S0", "Term changed while starting")
 				continue loop
 			}
 			if !ok {
 				// No longer the leader, so term has changed
-				dbg(dTest, "T0  S0", "No longer the leader, so term has changed")
+				dbg(dTest, "T0   S0", "No longer the leader, so term has changed")
 				continue loop
 			}
 			if starti+i != index1 {
@@ -666,7 +666,7 @@ loop:
 			if ix, ok := cmd.(int); ok == false || ix != cmds[i-1] {
 				if ix == -1 {
 					// term changed -- try again
-					dbg(dTest, "T0  S0", "term changed -- try again")
+					dbg(dTest, "T0   S0", "term changed -- try again")
 					continue loop
 				}
 				t.Fatalf("wrong value %v committed for index %v; expected %v\n", cmd, starti+i, cmds)
@@ -685,7 +685,7 @@ loop:
 		}
 
 		if failed {
-			dbg(dTest, "T0  S0", "failed; term changed")
+			dbg(dTest, "T0   S0", "failed; term changed")
 			continue loop
 		}
 
@@ -845,7 +845,7 @@ func TestPersist32C(t *testing.T) {
 // alive servers isn't enough to form a majority, perhaps start a new server.
 // The leader in a new term may try to finish replicating log entries that
 // haven't been committed yet.
-func TestFigure82C(t *testing.T) {
+func TestFigure8Reliable2C(t *testing.T) {
 	servers := 5
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
@@ -887,6 +887,17 @@ func TestFigure82C(t *testing.T) {
 				nup += 1
 			}
 		}
+
+		ups := []int{}
+		dns := []int{}
+		for i := 0; i < servers; i++ {
+			if cfg.rafts[i] == nil {
+				dns = append(dns, i)
+			} else {
+				ups = append(ups, i)
+			}
+		}
+		dbg(dTest, "T0   S0 servers up=%v down=%v", ups, dns)
 	}
 
 	for i := 0; i < servers; i++ {
@@ -952,7 +963,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 			}
 		}
 
-		if (rand.Int() % 1000) < 100 {
+		if (rand.Int() % 1000) < 100 {  // 10%
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
 		} else {
@@ -972,6 +983,17 @@ func TestFigure8Unreliable2C(t *testing.T) {
 				nup += 1
 			}
 		}
+
+		ups := []int{}
+		dns := []int{}
+		for i := 0; i < servers; i++ {
+			if cfg.connected[i] {
+				ups = append(ups, i)
+			} else {
+				dns = append(dns, i)
+			}
+		}
+		dbg(dTest, "T0   S0 servers online=%v offline=%v", ups, dns)
 	}
 
 	for i := 0; i < servers; i++ {
@@ -986,6 +1008,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 }
 
 func internalChurn(t *testing.T, unreliable bool) {
+	dbg := func(...any) {} // XXX: logging disabled
 
 	servers := 5
 	cfg := make_config(t, servers, unreliable, false)
@@ -1001,35 +1024,40 @@ func internalChurn(t *testing.T, unreliable bool) {
 
 	// create concurrent clients
 	cfn := func(me int, ch chan []int) {
-		var ret []int
-		ret = nil
-		defer func() { ch <- ret }()
 		values := []int{}
 		for atomic.LoadInt32(&stop) == 0 {
+			dbg(dTest, "T0   S0 new round of write request cfn(me=%v)", me)
 			x := rand.Int()
 			index := -1
 			ok := false
+			leader := -1
 			for i := 0; i < servers; i++ {
 				// try them all, maybe one of them is a leader
 				cfg.mu.Lock()
 				rf := cfg.rafts[i]
 				cfg.mu.Unlock()
+				dbg(dTest, "T0   S%d did not hang in lock cfn(me=%v)", i, me)
 				if rf != nil {
+					dbg(dTest, "T0   S%d try to Start(x=%v) cfn(me=%v)", i, x, me)
 					index1, _, ok1 := rf.Start(x)
+					dbg(dTest, "T0   S%d done   Start(x=%v) cfn(me=%v)", i, x, me)
 					if ok1 {
 						ok = ok1
 						index = index1
+						leader = i
 					}
 				}
 			}
-			if ok {
+			if ok { // found a leader
 				// maybe leader will commit our value, maybe not.
 				// but don't wait forever.
 				for _, to := range []int{10, 20, 50, 100, 200} {
+					dbg(dTest, "T0   S%d nCommitted(index=%v) next_sleep=%v cfn(me=%v)", leader, index, to, me)
 					nd, cmd := cfg.nCommitted(index)
-					if nd > 0 {
+					if nd > 0 { // at least 1 server committed it
 						if xx, ok := cmd.(int); ok {
 							if xx == x {
+								dbg(dTest, "T0   S%d cmd=%v index=%v committed cfn(me=%v)", leader, cmd, index, me)
 								values = append(values, x)
 							}
 						} else {
@@ -1040,11 +1068,14 @@ func internalChurn(t *testing.T, unreliable bool) {
 					time.Sleep(time.Duration(to) * time.Millisecond)
 				}
 			} else {
+				dbg(dTest, "T0   S0 no leader found in cfn(me=%v) time.Sleep(%v)", me, time.Duration(79+me*17)*time.Millisecond)
 				time.Sleep(time.Duration(79+me*17) * time.Millisecond)
 			}
 		}
-		ret = values
+		dbg(dTest, "T0   S0 stopped in cfn(me=%v)", me)
+		ch <- values
 	}
+	dbg(dTest, "T0   S0 created concurrent clients")
 
 	ncli := 3
 	cha := []chan []int{}
@@ -1052,7 +1083,9 @@ func internalChurn(t *testing.T, unreliable bool) {
 		cha = append(cha, make(chan []int))
 		go cfn(i, cha[i])
 	}
+	dbg(dTest, "T0   S0 started concurrent clients")
 
+	dbg(dTest, "T0   S0 churn randomly to disconnect, connect, or crash")
 	for iters := 0; iters < 20; iters++ {
 		if (rand.Int() % 1000) < 200 {
 			i := rand.Int() % servers
@@ -1080,6 +1113,7 @@ func internalChurn(t *testing.T, unreliable bool) {
 		// the election timeout, but not hugely smaller.
 		time.Sleep((RaftElectionTimeout * 7) / 10)
 	}
+	dbg(dTest, "T0   S0 finished churning")
 
 	time.Sleep(RaftElectionTimeout)
 	cfg.setunreliable(false)
@@ -1089,6 +1123,7 @@ func internalChurn(t *testing.T, unreliable bool) {
 		}
 		cfg.connect(i)
 	}
+	dbg(dTest, "T0   S0 connected all servers")
 
 	atomic.StoreInt32(&stop, 1)
 
@@ -1100,10 +1135,12 @@ func internalChurn(t *testing.T, unreliable bool) {
 		}
 		values = append(values, vv...)
 	}
+	dbg(dTest, "T0   S0 values=%v <- [3]cha chan", values)
 
 	time.Sleep(RaftElectionTimeout)
 
 	lastIndex := cfg.one(rand.Int(), servers, true)
+	dbg(dTest, "T0   S0 reached last agreement lastIndex=%d", lastIndex)
 
 	really := make([]int, lastIndex+1)
 	for index := 1; index <= lastIndex; index++ {

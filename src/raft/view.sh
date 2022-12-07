@@ -8,5 +8,8 @@ logfile="$1"
 lnavformat=$(realpath .raft.lnav.json)
 (cd ~/.config/lnav/formats/installed && ln -sf "$lnavformat")
 
-go run ./cmd/ppl/main.go "$logfile"
-exec lnav -f .filter-out.lnav "$logfile"
+log=/tmp/raft/$(basename "$logfile")
+cp -f "$logfile" "$log"
+
+go run ./cmd/ppl/main.go "$log"
+exec lnav -f .filter-out.lnav "$log"

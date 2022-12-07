@@ -6,17 +6,24 @@ import (
 	"6.824/labgob"
 )
 
+type PrevPersisted = struct {
+	term     int64
+	votedFor int
+	entry    *Entry
+}
+
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 //
 // It shall be called on state changes of currentTerm, votedFor, and logs.
-// Specifically, `persist` shall be called on each state change. But there are
-// problems:
-//  1. multi-object state changes. TODO: not in this lab but do it in reality.
+// Specifically, `persist` shall be called on each state change. But we need
+// transaction for multi-object state changes. in real world.
+//
+// not thread-safe
 func (rf *Raft) persist() {
 	// Your code here (2C).
-	// Example:
+
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 
@@ -25,6 +32,19 @@ func (rf *Raft) persist() {
 		votedFor = -1
 	} else {
 		votedFor = *rf.state.votedFor
+	}
+
+	var lastlog *Entry = nil
+	if len(rf.state.log) > 0 {
+		entry := last(rf.state.log)
+		lastlog = &entry
+	}
+
+	if true &&
+		rf.persisted.term == rf.state.currentTerm.Load() &&
+		rf.persisted.votedFor == votedFor &&
+		rf.persisted.entry == lastlog {
+		return
 	}
 
 	// Persistent
@@ -38,6 +58,14 @@ func (rf *Raft) persist() {
 
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
+
+	rf.persisted.term = rf.state.currentTerm.Load()
+	rf.persisted.votedFor = votedFor
+	rf.persisted.entry = nil
+	if len(rf.state.log) > 0 {
+		entry := last(rf.state.log)
+		rf.persisted.entry = &entry
+	}
 }
 
 // restore previously persisted state.

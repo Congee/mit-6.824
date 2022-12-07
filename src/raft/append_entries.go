@@ -55,7 +55,7 @@ type AppendEntriesRep struct {
 
 func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntriesRep) {
 	term := rf.state.currentTerm.Load()
-	*rep = AppendEntriesRep{term, false, 0, nil}
+	rep.Term = term
 
 	// 1. $5.1 stale term from the sender.
 	//
@@ -110,7 +110,7 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 	if req.PrevLogIndex == 0 {
 		// It matches in case of the initial heartbeat
 	} else if req.PrevLogIndex > len(rf.state.log) {
-		rep.ConflictIndex = len(rf.state.log)
+		rep.ConflictIndex = max(1, len(rf.state.log))
 		rep.ConflictTerm = nil
 		return
 	} else if rf.state.log[req.PrevLogIndex-1].Term != req.PrevLogTerm {
@@ -153,7 +153,7 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 		rf.dbg(dCommit, "commitIndex <- %v", min(req.LeaderCommit, req.PrevLogIndex+len(req.Entries)))
 		rf.state.commitIndex = min(req.LeaderCommit, req.PrevLogIndex+len(req.Entries))
 		rf.persist()
-		rf.fire(TryApply{})
+		rf.tryApply()
 	}
 
 	rep.Success = true
@@ -175,77 +175,40 @@ func (rf *Raft) sendAppendEntries(
 }
 
 func (rf *Raft) makeAppendEntriesReq(srv int, empty bool) AppendEntriesReq {
-	term := rf.state.currentTerm.Load()
-	// Index of log entry immediately preceding new ones
-	previdx, prevterm := func(nxt int) (int, int64) {
-		if len(rf.state.log) == 0 || nxt == 1 {
-			return 0, 0
-		}
-
-		return nxt - 1, rf.state.log[nxt-2].Term
-	}(rf.state.nextIndex[srv])
-
+	assert(rf.role == Leader)
 	req := AppendEntriesReq{
-		term,
+		rf.state.currentTerm.Load(),
 		rf.me,
-		previdx,
-		prevterm,
+		rf.state.nextIndex[srv] - 1, // Index of log entry immediately preceding new ones
+		0,
 		make([]Entry, 0),
 		rf.state.commitIndex,
 	}
-	lastidx := len(rf.state.log)
+	if req.PrevLogIndex != 0 {
+		req.PrevLogTerm = rf.state.log[req.PrevLogIndex-1].Term
+	}
+
+	if empty {
+		return req
+	}
 
 	// • If last log index ≥ nextIndex for a follower: send AppendEntries RPC
 	//   with log entries starting at nextIndex
 	//   • If successful: update nextIndex and matchIndex for follower (§5.3)
 	//   • If AppendEntries fails because of log inconsistency: decrement
 	//     nextIndex and retry (§5.3)
-	if !empty && lastidx >= rf.state.nextIndex[srv] {
+	lastidx := len(rf.state.log)
+	if lastidx >= rf.state.nextIndex[srv] {
 		// 0 1  2  3
 		// 1 1 *1* 2
 		//     nxt last
 		// No out of bound error here as lastidx(0) >= 1 won't stand
+		assert(rf.role == Leader)
 		req.Entries = rf.state.log[rf.state.nextIndex[srv]-1:]
 	}
 
 	return req
 }
-
-// func (rf *Raft) makeAppendEntriesReq(srv int, empty bool) AppendEntriesReq {
-// 	assert(rf.role == Leader)
-// 	req := AppendEntriesReq{
-// 		rf.state.currentTerm.Load(),
-// 		rf.me,
-// 		rf.state.nextIndex[srv] - 1, // Index of log entry immediately preceding new ones
-// 		0,
-// 		make([]Log, 0),
-// 		rf.state.commitIndex,
-// 	}
-// 	if req.PrevLogIndex != 0 {
-// 		req.PrevLogTerm = rf.state.logs[req.PrevLogIndex-1].Term
-// 	}
-//
-// 	if empty {
-// 		return req
-// 	}
-//
-// 	// • If last log index ≥ nextIndex for a follower: send AppendEntries RPC
-// 	//   with log entries starting at nextIndex
-// 	//   • If successful: update nextIndex and matchIndex for follower (§5.3)
-// 	//   • If AppendEntries fails because of log inconsistency: decrement
-// 	//     nextIndex and retry (§5.3)
-// 	lastidx := len(rf.state.logs)
-// 	if lastidx >= rf.state.nextIndex[srv] {
-// 		// 0 1  2  3
-// 		// 1 1 *1* 2
-// 		//     nxt last
-// 		// No out of bound error here as lastidx(0) >= 1 won't stand
-// 		assert(rf.role == Leader)
-// 		req.Entries = rf.state.logs[rf.state.nextIndex[srv]-1:]
-// 	}
-//
-// 	return req
-// }
 
 type AEResponse uint8
 
@@ -256,7 +219,6 @@ const (
 	AESuccess
 )
 
-// thread-safe via a lock
 func (rf *Raft) handleAppendEntriesRep(
 	srv int,
 	req *AppendEntriesReq,
@@ -268,6 +230,7 @@ func (rf *Raft) handleAppendEntriesRep(
 
 	term := rf.state.currentTerm.Load()
 
+	// XXX: the sender also handles a stale request in a different place. TODO: clean it up
 	// Drop replis sent from an old term
 	if req.Term != term {
 		rf.dbg(dDrop, "rcvd stale AppendEntriesRep of %v", req)
@@ -290,16 +253,24 @@ func (rf *Raft) handleAppendEntriesRep(
 		if !rep.Success {
 			rf.dbgt(dLog, term, "-> S%d rep.Failure w/ %v <- T%d nxt=%d rep=%+v", srv, req.Entries, rep.Term, rf.state.nextIndex[srv], rep)
 
-			if rep.ConflictTerm != nil {
+			// NOTE: min() & max() in case of stale RPCs that return `ConflictIndex`.
+			// Remember that matchIndex[srv] never backs up.
+			update := func() bool {
 				for i := len(rf.state.log); i >= 1; i-- {
 					if rf.state.log[i-1].Term == *rep.ConflictTerm {
-						rf.state.nextIndex[srv] = i + 1
-						break
+						rf.state.nextIndex[srv] = min(rf.state.nextIndex[srv], i+1)                        // failure then failure with higher idx
+						rf.state.nextIndex[srv] = max(rf.state.nextIndex[srv], rf.state.matchIndex[srv]+1) // success then failure
+						return true
 					}
 				}
-			} else {
-				rf.state.nextIndex[srv] = rep.ConflictIndex
+				return false // didn't find ConflictTerm, go with ConflictIndex
 			}
+
+			if rep.ConflictTerm == nil || !update() {
+				rf.state.nextIndex[srv] = min(rf.state.nextIndex[srv], rep.ConflictIndex)
+				rf.state.nextIndex[srv] = max(rf.state.nextIndex[srv], rf.state.matchIndex[srv]+1)
+			}
+
 			rf.dbgt(dLog, term, "Conclicting req=%+v after state=%s", req, rf.state)
 			return AEConflict
 		}
@@ -311,10 +282,27 @@ func (rf *Raft) handleAppendEntriesRep(
 		// 1 1 1 3 4
 		// ->  *   *
 		// 1 1 1 2 2 2
-		// NOTE: doing max() to avoid stale replies
-		newidx := req.PrevLogIndex + len(req.Entries)
-		rf.state.nextIndex[srv] = max(rf.state.nextIndex[srv], newidx+1)
-		rf.state.matchIndex[srv] = max(rf.state.matchIndex[srv], newidx)
+		//
+		// NOTE: Avoid stale replies
+		//
+		// nextIndex is calculated upon matchIndex because a stale RPC in the same
+		// term. Request one was sent later and succeeded and updated nextIndex &
+		// matchIndex based on the len. Request two was sent earlier but failed.
+		// nextIndex[S1] regresses if we do max(nextIndex[S1], len(req.Entries))
+		// since len(req.Entries) is as stale as this RPC:
+		//
+		//			newidx := req.PrevLogIndex + len(req.Entries)
+		// 			rf.state.nextIndex[srv] = max(rf.state.nextIndex[srv], newidx+1)
+		// 			rf.state.matchIndex[srv] = max(rf.state.matchIndex[srv], newidx)
+		//
+		//   S0 -> S1 {Success,									   } -> matchIndex[S1] = 489, nextIndex[S1] = 490
+		//   S0 -> S1 {Failure, ConflictIndex = 424} -> matchIndex[S1] = 489, nextIndex[S1] = 424
+		//
+		// To avoid regression, calculate nextIndex upon matchIndex. Remember that
+		// nextIndex[S1] backs up, matchIndex[S1] does not
+		match := max(rf.state.matchIndex[srv], req.PrevLogIndex+len(req.Entries))
+		rf.state.matchIndex[srv] = match
+		rf.state.nextIndex[srv] = match + 1
 
 		rf.dbg(dLog, "updated for S%d nextIndex=%v matchIndex=%v", srv, rf.state.nextIndex, rf.state.matchIndex)
 		return AESuccess
@@ -336,7 +324,14 @@ loop:
 		case <-ctx.Done():
 			return rep, errors.New("cancelled")
 		default:
-			if rf.sendAppendEntries(srv, &req, &rep) || rf.state.currentTerm.Load() != req.Term {
+			term := rf.state.currentTerm.Load()
+			if term != req.Term {
+				assert(term > req.Term)
+				rf.dbg(dDrop, "-> S%d; req.Term=T%v", srv, req.Term)
+				return rep, errors.New("old request term")
+			}
+
+			if rf.sendAppendEntries(srv, &req, &rep) {
 				break loop
 			} else {
 				rf.dbgt(dDrop, req.Term, "-> S%d failed  AppendEntries; retrying...", srv)

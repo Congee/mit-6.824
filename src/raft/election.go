@@ -23,7 +23,7 @@ func (rf *Raft) resetTimer() {
 	future := time.Now().Add(rf.ElectionInterval)
 	rf.dbg(dTimer, "election timer -> %s@%s", trktime(future), fn)
 
-	interval := time.Duration(rand.Intn(1000)) * time.Millisecond
+	interval := time.Duration(rand.Int63n(ElectionTimeoutBase.Milliseconds())) * time.Millisecond
 	rf.ElectionInterval = ElectionTimeoutBase + interval
 }
 
@@ -93,7 +93,7 @@ func (rf *Raft) poll(req RequestVoteArgs, timer <-chan time.Time) {
 
 			// Drop replis sent from an old term
 			if req.Term != rf.state.currentTerm.Load() {
-				rf.dbg(dDrop, "rcvd stale RequestVoteReply of T%d", req.Term)
+				rf.dbg(dDrop, "rcvd stale RequestVoteReply of req.Term=T%d", req.Term)
 				return
 			}
 

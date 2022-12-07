@@ -68,9 +68,12 @@ func (rf *Raft) Start(write LabCommand) (int, int, bool) {
 
 	done := make(chan StartResponse)
 	rf.fire(WriteRequest{Command{Write, hash(write), write}, done})
-	result := <-done
-
-	return result.index, result.term, result.isleader
+	select {
+	case <-rf.killch:
+		return 0, 0, false
+	case result := <-done:
+		return result.index, result.term, result.isleader
+	}
 }
 
 func (rf *Raft) WriteNop() (int, int, bool) {
@@ -101,10 +104,11 @@ func (rf *Raft) Write(cmd Command) (index int, term int, isleader bool) {
 	// 	}
 	// }
 
-	entry := Entry{len(rf.state.log) + 1, int64(term), cmd}
+	entry := Entry{index, int64(term), cmd}
 	rf.state.log = append(rf.state.log, entry)
 	rf.state.nextIndex[rf.me]++
 	rf.state.matchIndex[rf.me]++
+	rf.persist()
 
 	return
 }

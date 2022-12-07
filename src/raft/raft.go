@@ -102,8 +102,19 @@ type Raft struct {
 	// Received by the tester
 	applyCh chan<- ApplyMsg
 
+	// Buffer to the state machine. The state machine - applier() in test - does
+	// additional work in a blocking way. Thus, it can be CPU intensive and
+	// blocks the main thread for a considerable amout of time (0.12s in my case
+	// of ~450 cmds to apply). We use this buffer to reduce the stress on the
+	// main thread.
+	buffer chan ApplyMsg
+
 	AppendEntriesCancels []context.CancelFunc
 	RequestVoteCancels   []context.CancelFunc
+
+	// Term, votedFor, and log that are previously cached for the persister to
+	// avoid writing with the same thing
+	persisted PrevPersisted
 }
 
 type Entry struct {
@@ -218,10 +229,10 @@ func (rf *Raft) ticker() {
 	for !rf.killed() {
 		select {
 		case <-rf.killch:
-			for range rf.bus {
-			}
+			// TODO: cancel all goroutines gracefully
 			rf.cancelrpcs(rf.AppendEntriesCancels)
 			rf.cancelrpcs(rf.RequestVoteCancels)
+			adrain(rf.bus)
 			return
 		case <-rf.ElectionTimer.C:
 			rf.dbg(dTimer, "electiontimeout after %v", rf.ElectionInterval)
@@ -233,14 +244,16 @@ func (rf *Raft) ticker() {
 				rf.resetTimer() // XXX: 4th case to reset the timer
 			}
 		case ev := <-rf.bus:
-			rf.handle(ev)
+			if !rf.killed() { // FIXME: what about the sender what awaits ev.done?
+				rf.dbg(dInfo, "event %T%v; len(rf.bus)=%v", ev, ev, len(rf.bus))
+				rf.handle(ev)
+				rf.dbg(dInfo, "procd %T%v; len(rf.bus)=%v", ev, ev, len(rf.bus))
+			}
 		}
 	}
 }
 
 func (rf *Raft) handle(ev any) {
-	rf.dbg(dInfo, "event %T%v", ev, ev)
-
 	switch ev := ev.(type) {
 	case Thunk:
 		ev.fn()
@@ -303,7 +316,7 @@ func (rf *Raft) handle(ev any) {
 	case TrySetCommitIndex:
 		if len(rf.trySetCommitIndex()) > 0 {
 			rf.persist()
-			rf.fire(TryApply{})
+			rf.tryApply() // Need to do this ASAP in case of congested ev.bus to update LeaderCommit
 		}
 
 	case TryApply:
@@ -333,19 +346,19 @@ func (rf *Raft) handle(ev any) {
 // goes from 3 to 5, [4,5] will be the result
 func (rf *Raft) trySetCommitIndex() []int {
 	term := rf.state.currentTerm.Load()
-	logs := rf.state.log
+	log := rf.state.log
 
 	rf.dbg(
 		dCommit,
-		"commitIndex=%d lastApplied=%d nextIndex=%v matchIndex=%v logs=%+v",
+		"commitIndex=%d lastApplied=%d nextIndex=%v matchIndex=%v log=%+v",
 		rf.state.commitIndex,
 		rf.state.lastApplied,
 		rf.state.nextIndex,
 		rf.state.matchIndex,
-		logs,
+		log,
 	)
 
-	for N := len(logs); N >= 1 && logs[N-1].Term == term; N-- {
+	for N := len(log); N >= 1 && log[N-1].Term == term; N-- {
 		if N <= rf.state.commitIndex {
 			continue
 		}
@@ -382,11 +395,17 @@ func (rf *Raft) tryApply() []int {
 			Command:      cmd.Value,
 			CommandIndex: cmdidx,
 		}
-		rf.dbg(dLog, "applyin cmd=%v @ %v", msg.Command, rf.state.lastApplied)
-		rf.applyCh <- msg // XXX: linearizable writes in tests
-		rf.dbg(dLog, "applied cmd=%v @ %v", msg.Command, rf.state.lastApplied)
+
+		rf.dbg(dLog, "apply cmd=%v @ %v", msg.Command, rf.state.lastApplied)
+		rf.buffer <- msg // XXX: linearizable writes in tests
 	}
 	return applied
+}
+
+func (rf *Raft) applier() {
+	for msg := range rf.buffer {
+		rf.applyCh <- msg
+	}
 }
 
 // $5.3 When a leader "first" comes to power, it initializes all nextIndex
@@ -432,7 +451,7 @@ func Make(
 	rf.ElectionInterval = ElectionTimeoutBase + interval
 
 	rf.tick = time.NewTicker(HeartbeatInterval)
-	rf.bus = make(chan any)
+	rf.bus = make(chan any, 1024)
 	rf.leaderId = -1
 	rf.role = Follower
 	rf.state.nextIndex = make([]int, len(peers))
@@ -440,14 +459,17 @@ func Make(
 	rf.killch = make(chan struct{})
 	rf.dead.Store(false)
 	rf.applyCh = applyCh
-	rf.initializeNextMatchIndex()
+	rf.buffer = make(chan ApplyMsg, 1024)
+	rf.persisted = PrevPersisted{term: int64(-1), votedFor: -2, entry: nil}
 	// other rf.state members are zero-initialized
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.initializeNextMatchIndex()
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	go rf.applier()
 	rf.dbg(dInfo, "startup with seed=%d", seed)
 
 	return rf

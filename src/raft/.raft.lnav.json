@@ -6,7 +6,7 @@
     "file-pattern": ".*raft/.*log$",
     "regex": {
       "basic": {
-        "pattern": "^(?<timestamp>[0-9]) (?<ts>[0-9]{8}) (?<type>[A-Z0-9]{4}) (?<term>T[ 0-9]{2}) (?<server>S[0-9]+) (?<msg>.+)$"
+        "pattern": "^(?<timestamp>[0-9]) (?<ts>[0-9]{8}) (?<type>[A-Z0-9]{4}) (?<term>T[ 0-9]{3}) (?<server>S[0-9]+) (?<msg>.+)$"
       }
     },
     "timestamp-format": ["%6"],
@@ -28,8 +28,7 @@
       },
       "term": {
         "kind": "string",
-        "identifier": false,
-        "rewriter": ";SELECT printf(\"%-3s\", term) FROM raft"
+        "identifier": false
       },
       "server": {
         "kind": "string",
@@ -42,26 +41,26 @@
       }
     },
     "highlights": {
-      "TIMR": { "pattern": ".{8} TIMR T[ 0-9]{2} S.", "color": "#9a9a99" },
-      "VOTE": { "pattern": ".{8} VOTE T[ 0-9]{2} S.", "color": "#67a0b2" },
-      "LEAD": { "pattern": ".{8} LEAD T[ 0-9]{2} S.", "color": "#d0b343" },
-      "TERM": { "pattern": ".{8} TERM T[ 0-9]{2} S.", "color": "#70c43f" },
-      "LOG1": { "pattern": ".{8} LOG1 T[ 0-9]{2} S.", "color": "#4878bc" },
-      "LOG2": { "pattern": ".{8} LOG2 T[ 0-9]{2} S.", "color": "#398280" },
-      "CMIT": { "pattern": ".{8} CMIT T[ 0-9]{2} S.", "color": "#98719f" },
-      "PERS": { "pattern": ".{8} PERS T[ 0-9]{2} S.", "color": "#d08341" },
-      "SNAP": { "pattern": ".{8} SNAP T[ 0-9]{2} S.", "color": "#FD971F" },
-      "DROP": { "pattern": ".{8} DROP T[ 0-9]{2} S.", "color": "#ff615c" },
-      "CLNT": { "pattern": ".{8} CLNT T[ 0-9]{2} S.", "color": "#00813c" },
-      "TEST": { "pattern": ".{8} TEST T[ 0-9]{2} S.", "color": "#fe2c79" },
-      "INFO": { "pattern": ".{8} INFO T[ 0-9]{2} S.", "color": "#ffffff" },
-      "WARN": { "pattern": ".{8} WARN T[ 0-9]{2} S.", "color": "#d08341" },
-      "ERRO": { "pattern": ".{8} ERRO T[ 0-9]{2} S.", "color": "#fe2626" },
-      "TRCE": { "pattern": ".{8} TRCE T[ 0-9]{2} S.", "color": "#fe2626" }
+      "TIMR": { "pattern": ".{8} TIMR T[ 0-9]{3} S.", "color": "#9a9a99" },
+      "VOTE": { "pattern": ".{8} VOTE T[ 0-9]{3} S.", "color": "#67a0b2" },
+      "LEAD": { "pattern": ".{8} LEAD T[ 0-9]{3} S.", "color": "#d0b343" },
+      "TERM": { "pattern": ".{8} TERM T[ 0-9]{3} S.", "color": "#70c43f" },
+      "LOG1": { "pattern": ".{8} LOG1 T[ 0-9]{3} S.", "color": "#4878bc" },
+      "LOG2": { "pattern": ".{8} LOG2 T[ 0-9]{3} S.", "color": "#398280" },
+      "CMIT": { "pattern": ".{8} CMIT T[ 0-9]{3} S.", "color": "#98719f" },
+      "PERS": { "pattern": ".{8} PERS T[ 0-9]{3} S.", "color": "#d08341" },
+      "SNAP": { "pattern": ".{8} SNAP T[ 0-9]{3} S.", "color": "#FD971F" },
+      "DROP": { "pattern": ".{8} DROP T[ 0-9]{3} S.", "color": "#ff615c" },
+      "CLNT": { "pattern": ".{8} CLNT T[ 0-9]{3} S.", "color": "#00813c" },
+      "TEST": { "pattern": ".{8} TEST T[ 0-9]{3} S.", "color": "#fe2c79" },
+      "INFO": { "pattern": ".{8} INFO T[ 0-9]{3} S.", "color": "#ffffff" },
+      "WARN": { "pattern": ".{8} WARN T[ 0-9]{3} S.", "color": "#d08341" },
+      "ERRO": { "pattern": ".{8} ERRO T[ 0-9]{3} S.", "color": "#fe2626" },
+      "TRCE": { "pattern": ".{8} TRCE T[ 0-9]{3} S.", "color": "#fe2626" }
     },
     "sample": [
       {
-        "line": "1 00372603 LOG1 T15 S4 updated for S0 nextIndex=[54 53 53 53 54] matchIndex=[53 0 52 0 53]"
+        "line": "1 00372603 LOG1 T15  S4 updated for S0 nextIndex=[54 53 53 53 54] matchIndex=[53 0 52 0 53]"
       }
     ]
   }
