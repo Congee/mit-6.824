@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"math/rand"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -194,6 +195,7 @@ func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 
 // returns "" or error string
 func (cfg *config) ingestSnap(i int, snapshot []byte, index int) string {
+	dbg(dTest, "T0   S%d ingestSnap(index=%d, %v)", i, index, fmtsnapshot(snapshot))
 	if snapshot == nil {
 		log.Fatalf("nil snapshot")
 		return "nil snapshot"
@@ -579,7 +581,9 @@ func (cfg *config) wait(index int, n int, startTerm int) interface{} {
 // if retry==false, calls Start() only once, in order
 // to simplify the early Lab 2B tests.
 func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
-	dbg(dTest, "T0   S0 one(%v, servers=%v, retry=%t)", cmd, expectedServers, retry)
+	fname, ln := caller(2)
+	fn := last(strings.Split(fname, "."))
+	dbg(dTest, "T0   S0 one(cmd=%v, servers=%d, retry=%t); %s@%d", cmd, expectedServers, retry, fn, ln)
 
 	t0 := time.Now()
 	starts := 0

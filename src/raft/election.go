@@ -27,7 +27,7 @@ func (rf *Raft) resetTimer() {
 }
 
 func (rf *Raft) campaign() {
-	assert(rf.role != Leader, "role changed to Leader when campaign()")
+	assertf(rf.role != Leader, "role changed to Leader when campaign()")
 	// $5.2
 	// • On conversion to candidate, start election:
 	//   • Increment currentTerm
@@ -47,8 +47,8 @@ func (rf *Raft) campaign() {
 	req := RequestVoteArgs{
 		rf.state.currentTerm.Load(), // already incremented once
 		rf.me,
-		len(rf.state.log),
-		rf.state.getLastLogTerm(),
+		rf.state.baseidx + len(rf.state.log),
+		rf.getLastLogTerm(),
 	}
 	go rf.poll(req, time.After(rf.ElectionInterval)) // either times out or wins
 	rf.dbg(dTimer, "poll timer to wait for %v", rf.ElectionInterval)
@@ -210,7 +210,6 @@ func (rf *Raft) handleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 	grantVote := func() {
 		reply.VoteGranted = true
 		rf.voteFor(&args.CandidateId) // XXX: shall vote only once in current term
-		rf.persist()
 		// $5.2
 		// If election timeout elapses without receiving AppendEntries RPC from
 		// current leader or granting vote to candidate: convert to candidate
@@ -218,7 +217,9 @@ func (rf *Raft) handleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, args.Term)
 		rf.fire(RoleChange{rf.role, Follower})
 		rf.role = Follower
+		rf.persist()
 		rf.dbg(dVote, "granted vote to S%d T%d", args.CandidateId, args.Term)
+		rf.dbg(dVote, "state=%v getLastLogTerm()=%d", rf.state, rf.getLastLogTerm())
 	}
 
 	// $5.4.1 Election restriction
@@ -247,10 +248,11 @@ func (rf *Raft) handleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 	// up-to-date as receiver’s log, grant vote (§5.2, §5.4)
 	//
 	// / XXX: do not grant vote if already voted for some in the current term
+	lastidx := rf.state.baseidx + len(rf.state.log)
 	if rf.state.votedFor == nil || *rf.state.votedFor == args.CandidateId {
-		if args.LastLogTerm > rf.state.getLastLogTerm() {
+		if args.LastLogTerm > rf.getLastLogTerm() {
 			grantVote()
-		} else if args.LastLogTerm == rf.state.getLastLogTerm() && args.LastLogIndex >= len(rf.state.log) {
+		} else if args.LastLogTerm == rf.getLastLogTerm() && args.LastLogIndex >= lastidx {
 			grantVote()
 		}
 	}
@@ -288,31 +290,22 @@ func (rf *Raft) sendRequestVote(
 	args *RequestVoteArgs,
 	reply *RequestVoteReply,
 ) bool {
-	// XXX: ugly hack but this Call can block for a heck of 10s
-	// var result bool
-	// for {
-	// 	ctx, cancel := context.WithTimeout(context.Background(), HeartbeatInterval)
-	// 	defer cancel()
-	//
-	// 	done := make(chan struct{})
-	// 	go func() {
-	// 		result = rf.peers[server].Call("Raft.RequestVote", args, reply)
-	// 		done <- struct{}{}
-	// 	}()
-	//
-	// 	select {
-	// 	case <-done:
-	// 		return result
-	// 	case <-ctx.Done():
-	// 		// continue in loop
-	// 	}
-	// }
 	return rf.peers[server].Call("Raft.RequestVote", args, reply)
 }
 
-func (s *State) getLastLogTerm() int64 {
-	if len(s.log) == 0 {
-		return 0
+func (rf *Raft) getLastLogTerm() int64 {
+	s := rf.state
+
+	if s.baseidx == 0 {
+		if len(s.log) == 0 {
+			return 0
+		}
+		return last(s.log).Term
 	}
+
+	if len(s.log) == 0 {
+		return rf.snapshotted.lastIncludedTerm
+	}
+
 	return last(s.log).Term
 }

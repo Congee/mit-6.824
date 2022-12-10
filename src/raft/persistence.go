@@ -6,10 +6,64 @@ import (
 	"6.824/labgob"
 )
 
-type PrevPersisted = struct {
-	term     int64
-	votedFor int
-	entry    *Entry
+type PrevPersisted struct {
+	// Cache these for the persister to avoid writing with the same thing
+	currentTerm  int64
+	votedFor     int
+	lastLogIndex int // Log Matching property to keep track of the last log entry
+	lastLogTerm  int64
+
+	commitIndex int
+	lastApplied int
+
+	lastIncludedIndex int
+	lastIncludedTerm  int64
+}
+
+type Snapshotted struct {
+	// Updated on taking a snapshot. These are used by getLastLogTerm() for
+	// building a RequestVote RPC request. getLastLogTerm() would be embarrassing
+	// if rf.state.log gets truncated after taking a snapshot in a rare case
+	lastIncludedIndex int
+	lastIncludedTerm  int64
+}
+
+type CrashState struct {
+	// Persistent
+	Term     int64
+	VotedFor int
+	Log      []Entry
+
+	// Volatile
+	CommitIndex int
+	LastApplied int
+
+	// Snapshot metadata
+	LastIncludedIndex int
+	LastIncludedTerm  int64
+	LastConfig        Config
+}
+
+func (rf *Raft) makeCrashState() CrashState {
+	var votedFor int
+	if rf.state.votedFor == nil {
+		votedFor = -1
+	} else {
+		votedFor = *rf.state.votedFor
+	}
+
+	return CrashState{
+		rf.state.currentTerm.Load(),
+		votedFor,
+		rf.state.log,
+
+		rf.state.commitIndex,
+		rf.state.lastApplied,
+
+		rf.snapshotted.lastIncludedIndex,
+		rf.snapshotted.lastIncludedTerm,
+		Config{},
+	}
 }
 
 // save Raft's persistent state to stable storage,
@@ -24,48 +78,36 @@ type PrevPersisted = struct {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 
-	w := new(bytes.Buffer)
-	e := labgob.NewEncoder(w)
+	lastidx := rf.state.baseidx + len(rf.state.log)
+	state := rf.makeCrashState()
 
-	var votedFor int
-	if rf.state.votedFor == nil {
-		votedFor = -1
-	} else {
-		votedFor = *rf.state.votedFor
-	}
-
-	var lastlog *Entry = nil
-	if len(rf.state.log) > 0 {
-		entry := last(rf.state.log)
-		lastlog = &entry
-	}
-
+	// Do not persist if nothing changes to avoid an expensive write
 	if true &&
-		rf.persisted.term == rf.state.currentTerm.Load() &&
-		rf.persisted.votedFor == votedFor &&
-		rf.persisted.entry == lastlog {
+		rf.persisted.currentTerm == state.Term &&
+		rf.persisted.votedFor == state.VotedFor &&
+		rf.persisted.lastLogIndex == lastidx &&
+		rf.persisted.commitIndex == state.CommitIndex &&
+		rf.persisted.lastApplied == state.LastApplied &&
+		rf.persisted.lastIncludedIndex == state.LastIncludedIndex {
 		return
 	}
 
-	// Persistent
-	e.Encode(rf.state.currentTerm.Load())
-	e.Encode(votedFor)
-	e.Encode(rf.state.log)
+	// Persist to disk
+	w := new(bytes.Buffer)
+	labgob.NewEncoder(w).Encode(&state)
+	rf.persister.SaveRaftState(w.Bytes())
 
-	// Volatile
-	e.Encode(rf.state.commitIndex)
-	e.Encode(rf.state.lastApplied)
+	// Update for the next comparison
+	rf.persisted.currentTerm = state.Term
+	rf.persisted.votedFor = state.VotedFor
+	rf.persisted.lastLogIndex = lastidx
+	rf.persisted.lastLogTerm = rf.getLastLogTerm()
+	rf.persisted.commitIndex = state.CommitIndex
+	rf.persisted.lastApplied = state.LastApplied
+	rf.persisted.lastIncludedIndex = state.LastIncludedIndex
+	rf.persisted.lastIncludedTerm = state.LastIncludedTerm
 
-	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
-
-	rf.persisted.term = rf.state.currentTerm.Load()
-	rf.persisted.votedFor = votedFor
-	rf.persisted.entry = nil
-	if len(rf.state.log) > 0 {
-		entry := last(rf.state.log)
-		rf.persisted.entry = &entry
-	}
+	rf.dbg(dPersist, "persisted=%+v state=%v", rf.persisted, rf.state)
 }
 
 // restore previously persisted state.
@@ -74,37 +116,30 @@ func (rf *Raft) readPersist(data []byte) {
 		return
 	}
 	// Your code here (2C).
-	// Example:
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 
-	// Persistent
-	var currentTerm int64
-	var votedFor int
-	var logs []Entry
-
-	// Volatile
-	var commitIndex int
-	var lastApplied int
-
-	var err error
-	f := func(e any) bool {
-		err = d.Decode(e)
-		return err == nil
-	}
-
-	if f(&currentTerm) && f(&votedFor) && f(&logs) && f(&commitIndex) && f(&lastApplied) {
-		rf.state.currentTerm.Store(currentTerm)
-		if votedFor == -1 {
-			rf.state.votedFor = nil
-		} else {
-			rf.state.votedFor = &votedFor
-		}
-		rf.state.log = logs
-
-		rf.state.commitIndex = commitIndex
-		rf.state.lastApplied = lastApplied
-	} else {
+	var state CrashState
+	if err := d.Decode(&state); err != nil {
 		panic(err.Error())
 	}
+
+	rf.state.currentTerm.Store(state.Term)
+	if state.VotedFor == -1 {
+		rf.state.votedFor = nil
+	} else {
+		rf.state.votedFor = &state.VotedFor
+	}
+	rf.state.log = state.Log
+
+	rf.state.commitIndex = state.CommitIndex
+	rf.state.lastApplied = state.LastApplied
+
+	// In case a machine crashes, reboots, then becomes a Candidate
+	rf.persisted.lastIncludedIndex = state.LastIncludedIndex
+	rf.persisted.lastIncludedTerm = state.LastIncludedTerm
+	rf.snapshotted.lastIncludedIndex = state.LastIncludedIndex
+	rf.snapshotted.lastIncludedTerm = state.LastIncludedTerm
+
+	rf.state.baseidx = state.LastIncludedIndex
 }

@@ -7,8 +7,8 @@ type (
 			isleader bool
 		}
 	}
-	ElectionTimeout    struct{ term int64 }
-	BroadcastHeatbeats struct{ empty bool }
+	ElectionTimeout        struct{ term int64 }
+	BroadcastHeatbeats     struct{ empty bool }
 	HandleAppendEntriesReq struct {
 		req  *AppendEntriesReq
 		rep  *AppendEntriesRep
@@ -24,6 +24,16 @@ type (
 		req  *RequestVoteArgs
 		rep  *RequestVoteReply
 		done chan struct{}
+	}
+	TakeSnapshot struct {
+		index        int
+		stateMachine []byte
+		done         chan struct{}
+	}
+	SendSnapshot struct {
+		srv int
+		req InstallSnapshotReq
+		rep InstallSnapshotRep
 	}
 	WriteRequest struct {
 		cmd  Command

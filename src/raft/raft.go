@@ -109,15 +109,18 @@ type Raft struct {
 	// additional work in a blocking way. Thus, it can be CPU intensive and
 	// blocks the main thread for a considerable amout of time (0.12s in my case
 	// of ~450 cmds to apply). We use this buffer to reduce the stress on the
-	// main thread.
+	// main thread. NOTE: we have to carefully make sure it play nicely with
+	// lastApplied for linearizability
 	buffer chan ApplyMsg
 
-	AppendEntriesCancels []context.CancelFunc
-	RequestVoteCancels   []context.CancelFunc
+	AppendEntriesCancels   []context.CancelFunc
+	InstallSnapshotCancels []context.CancelFunc
+	RequestVoteCancels     []context.CancelFunc
 
-	// Term, votedFor, and log that are previously cached for the persister to
-	// avoid writing with the same thing
-	persisted PrevPersisted
+	// Used to avoid writing the same thing twice and keep track of
+	// lastIncludedTerm for election
+	persisted   PrevPersisted
+	snapshotted Snapshotted
 }
 
 type Entry struct {
@@ -148,12 +151,15 @@ type State struct {
 
 	// ------------- volatile on all ------------------
 
+	// What log indices are added on top of, i.e., the last log index in snapshot
+	baseidx int
+
 	// Index of highest log entry known to be committed (initialized to 0,
 	// increases monotonically).
 	commitIndex int
 	// Index of highest log entry applied to state machine (initialized to 0,
 	// increases monotonically). Committed does not mean applied to state
-	// machine.
+	// machine. It converges to commitIndex due to async updates.
 	lastApplied int
 
 	// ------------- volatile on leader ------------------
@@ -224,10 +230,11 @@ func (rf *Raft) cancelrpcs(fns []context.CancelFunc) {
 
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
-func (rf *Raft) ticker() {
+func (rf *Raft) ticker(restored <-chan struct{}) {
 	// Your code here to check if a leader election should
 	// be started and to randomize sleeping time using
 	// time.Sleep().
+	<-restored
 
 	for !rf.killed() {
 		select {
@@ -235,6 +242,7 @@ func (rf *Raft) ticker() {
 			// TODO: cancel all goroutines gracefully
 			rf.cancelrpcs(rf.AppendEntriesCancels)
 			rf.cancelrpcs(rf.RequestVoteCancels)
+			rf.cancelrpcs(rf.InstallSnapshotCancels)
 			adrain(rf.bus)
 			return
 		case <-rf.ElectionTimer.C:
@@ -283,6 +291,7 @@ func (rf *Raft) handle(ev any) {
 			rf.cancelrpcs(rf.RequestVoteCancels)
 		case Leader:
 			rf.cancelrpcs(rf.AppendEntriesCancels)
+			rf.cancelrpcs(rf.InstallSnapshotCancels)
 		}
 
 	case ElectionTimeout:
@@ -307,6 +316,16 @@ func (rf *Raft) handle(ev any) {
 			rf.tick.Reset(HeartbeatInterval)
 		}
 
+	case TakeSnapshot:
+		rf.takeSnapshot(ev.index, ev.stateMachine)
+		ev.done <- struct{}{}
+
+	case SendSnapshot:
+		rf.cancelrpcs(rf.InstallSnapshotCancels)
+		ctx, cancel := context.WithCancel(context.Background())
+		rf.InstallSnapshotCancels = append(rf.InstallSnapshotCancels, cancel)
+		rf.doInstallSnapshot(ctx, ev.srv, &ev.req, &ev.rep)
+
 	case ReadRequest:
 	case WriteRequest:
 		index, term, isleader := rf.Write(ev.cmd)
@@ -320,10 +339,12 @@ func (rf *Raft) handle(ev any) {
 		if len(rf.trySetCommitIndex()) > 0 {
 			rf.persist()
 			rf.tryApply() // Need to do this ASAP in case of congested ev.bus to update LeaderCommit
+			rf.persist()
 		}
 
 	case TryApply:
 		rf.tryApply()
+		rf.persist()
 
 	case HandleAppendEntriesReq:
 		rf.handleAppendEntriesReq(ev.req, ev.rep)
@@ -351,32 +372,24 @@ func (rf *Raft) trySetCommitIndex() []int {
 	term := rf.state.currentTerm.Load()
 	log := rf.state.log
 
-	rf.dbg(
-		dCommit,
-		"commitIndex=%d lastApplied=%d nextIndex=%v matchIndex=%v log=%+v",
-		rf.state.commitIndex,
-		rf.state.lastApplied,
-		rf.state.nextIndex,
-		rf.state.matchIndex,
-		log,
-	)
+	rf.dbg(dCommit, "state=%v", rf.state)
 
 	for N := len(log); N >= 1 && log[N-1].Term == term; N-- {
-		if N <= rf.state.commitIndex {
+		if rf.state.baseidx+N <= rf.state.commitIndex {
 			continue
 		}
 
 		count := 0
 		for _, mi := range rf.state.matchIndex {
-			if mi >= N {
+			if mi >= rf.state.baseidx+N {
 				count++
 			}
 
 			if count > len(rf.state.matchIndex)/2 {
-				rf.dbg(dCommit, "commitIndex <- %v, lastApplied=%d", N, rf.state.lastApplied)
+				rf.dbg(dCommit, "commitIndex <- %v, lastApplied=%d", rf.state.baseidx+N, rf.state.lastApplied)
 				old := rf.state.commitIndex
-				rf.state.commitIndex = N
-				return []int{old + 1, N}
+				rf.state.commitIndex = rf.state.baseidx + N
+				return []int{old + 1, rf.state.commitIndex}
 			}
 		}
 	}
@@ -390,7 +403,7 @@ func (rf *Raft) tryApply() []int {
 	outbuf := []string{}
 	for rf.state.commitIndex > rf.state.lastApplied {
 		rf.state.lastApplied++
-		cmd := rf.state.log[rf.state.lastApplied-1].Command
+		cmd := rf.state.log[rf.state.lastApplied-1-rf.state.baseidx].Command
 		cmdidx := rf.state.lastApplied
 		applied = append(applied, cmdidx)
 
@@ -418,12 +431,51 @@ func (rf *Raft) applier() {
 // $5.3 When a leader "first" comes to power, it initializes all nextIndex
 // values to the index just after the last one in its log.
 func (rf *Raft) initializeNextMatchIndex() {
-	idx := len(rf.state.log)
+	idx := rf.state.baseidx + len(rf.state.log)
 	for i := range rf.peers {
 		rf.state.nextIndex[i] = idx + 1
 		rf.state.matchIndex[i] = 0
 	}
 	rf.state.matchIndex[rf.me] = idx
+}
+
+func (rf *Raft) restore() <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		if snapshot := rf.persister.ReadSnapshot(); len(snapshot) > 0 {
+			rf.dbg(dSnap, "read snapshot %v", fmtsnapshot(snapshot))
+
+			msg := ApplyMsg{}
+			msg.SnapshotValid = true
+			msg.Snapshot = snapshot
+			msg.SnapshotTerm = int(rf.persisted.lastIncludedTerm)
+			msg.SnapshotIndex = rf.persisted.lastIncludedIndex
+
+			rf.applyCh <- msg
+			rf.dbg(dSnap, "restored snapshot Index=%d Term=%d state=%+v", msg.SnapshotIndex, msg.SnapshotTerm, rf.state)
+		}
+
+		if rf.state.lastApplied > rf.state.baseidx {
+			outbuf := []string{}
+			// [2 3 4]
+			for i := 0; i <= rf.state.lastApplied-1-rf.state.baseidx; i++ {
+				cmd := rf.state.log[i]
+
+				msg := ApplyMsg{
+					CommandValid: true,
+					Command:      cmd.Command.Value,
+					CommandIndex: cmd.Index,
+				}
+
+				outbuf = append(outbuf, fmt.Sprintf("%v@%v", msg.Command, cmd.Index))
+				rf.applyCh <- msg
+			}
+			rf.dbg(dLog, "applied cmds=[%v]", strings.Join(outbuf, ", "))
+		}
+		rf.dbg(dInfo, "restored from disk rf.state=%+v rf.persisted=%+v", rf.state, rf.persisted)
+		done <- struct{}{}
+	}()
+	return done
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -467,7 +519,7 @@ func Make(
 	rf.dead.Store(false)
 	rf.applyCh = applyCh
 	rf.buffer = make(chan ApplyMsg, 1024)
-	rf.persisted = PrevPersisted{term: int64(-1), votedFor: -2, entry: nil}
+	rf.persisted = PrevPersisted{currentTerm: int64(-1), votedFor: -2}
 	// other rf.state members are zero-initialized
 
 	// initialize from state persisted before a crash
@@ -475,9 +527,9 @@ func Make(
 	rf.initializeNextMatchIndex()
 
 	// start ticker goroutine to start elections
-	go rf.ticker()
+	go rf.ticker(rf.restore())
 	go rf.applier()
-	rf.dbg(dInfo, "startup with seed=%d", seed)
+	rf.dbg(dInfo, "startup with seed=%d persisted=%+v state=%v", seed, rf.persisted, rf.state)
 
 	return rf
 }

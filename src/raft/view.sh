@@ -8,6 +8,7 @@ logfile="$1"
 lnavformat=$(realpath .raft.lnav.json)
 (cd ~/.config/lnav/formats/installed && ln -sf "$lnavformat")
 
+mkdir -p /tmp/raft
 log=/tmp/raft/$(basename "$logfile")
 cp -f "$logfile" "$log"
 

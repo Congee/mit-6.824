@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"bytes"
 	"container/list"
 	"fmt"
 	"hash/fnv"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"6.824/labgob"
 )
 
 // Debugging
@@ -48,9 +51,10 @@ func (s State) String() string {
 		}
 	}()
 	return fmt.Sprintf(
-		"{currentTerm:%d, votedFor:%v, logs:%+v, commitIndex:%d, lastApplied:%d, nextIndex:%v, matchIndex:%v}",
+		"{currentTerm:%d, votedFor:%v, baseidx:%d, log:%+v, commitIndex:%d, lastApplied:%d, nextIndex:%v, matchIndex:%v}",
 		s.currentTerm.Load(),
 		voted,
+		s.baseidx,
 		s.log,
 		s.commitIndex,
 		s.lastApplied,
@@ -61,7 +65,7 @@ func (s State) String() string {
 
 func (rf Raft) String() string {
 	return fmt.Sprintf(
-		"{peers %v, me %d, dead %t, ElectionInterval %v, state %s, role %s, leaderId %d}",
+		"{peers:%v me:%d dead:%t ElectionInterval:%v state:%s role:%s leaderId:%d persisted:%+v}",
 		seq(0, len(rf.peers)),
 		rf.me,
 		rf.dead.Load(),
@@ -69,6 +73,7 @@ func (rf Raft) String() string {
 		rf.state,
 		rf.role,
 		rf.leaderId,
+		rf.persisted,
 	)
 }
 
@@ -96,6 +101,29 @@ func (rep AppendEntriesRep) String() string {
 
 func (h HandleAppendEntriesRep) String() string {
 	return fmt.Sprintf("{srv: %v, req: %+v, rep: %+v}", h.srv, h.req, h.rep)
+}
+
+func (req InstallSnapshotReq) String() string {
+	return fmt.Sprintf(
+		"{Term:%d LeaderId:%d LastIncludedIndex:%d LastIncludedTerm:%d snapshot:%v}",
+		req.Term,
+		req.LeaderId,
+		req.LastIncludedIndex,
+		req.LastIncludedTerm,
+		fmtsnapshot(req.Data),
+	)
+}
+
+func (ss SendSnapshot) String() string {
+	return fmt.Sprintf("{srv:%d req:%v rep:%v}", ss.srv, ss.req, ss.rep)
+}
+
+func (ts TakeSnapshot) String() string {
+	return fmt.Sprintf(
+		"{index:%d stateMachine=%v}",
+		ts.index,
+		fmtsnapshot(ts.stateMachine),
+	)
 }
 
 func (w WriteRequest) String() string {
@@ -165,8 +193,7 @@ type Quadruple[T, U, V, X any] struct {
 	Fourth X
 }
 
-// TODO: lockless
-type Queue[T any] struct {
+type Queue[T any] struct { // TODO: lockless
 	mu   sync.Mutex
 	list *list.List
 }
@@ -243,12 +270,26 @@ func CloneSlice[S ~[]E, E any](s S) S {
 	return append(S([]E{}), s...)
 }
 
-func assert(exp bool, args ...any) {
+func assert(exp bool) {
 	if !exp {
-		if len(args) > 0 {
-			panic(args)
-		} else {
-			panic("assertion failed")
-		}
+		panic("assertion failed")
 	}
+}
+
+func assertf(exp bool, format string, args ...any) {
+	if !exp {
+		panic(fmt.Sprintf(format, args...))
+	}
+}
+
+func unimplemented(x any) { panic(x) }
+
+func fmtsnapshot(snapshot []byte) string {
+	var cmdidx int
+	var log []any
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	d.Decode(&cmdidx)
+	d.Decode(&log)
+	return fmt.Sprintf("{CommandIndex:%d log:%+v}", cmdidx, log)
 }
