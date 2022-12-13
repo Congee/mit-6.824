@@ -21,9 +21,11 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -385,6 +387,7 @@ func (rf *Raft) trySetCommitIndex() []int {
 // to state machine (§5.3).
 func (rf *Raft) tryApply() []int {
 	applied := []int{}
+	outbuf := []string{}
 	for rf.state.commitIndex > rf.state.lastApplied {
 		rf.state.lastApplied++
 		cmd := rf.state.log[rf.state.lastApplied-1].Command
@@ -397,8 +400,11 @@ func (rf *Raft) tryApply() []int {
 			CommandIndex: cmdidx,
 		}
 
-		rf.dbg(dLog, "apply cmd=%v @ %v", msg.Command, rf.state.lastApplied)
+		outbuf = append(outbuf, fmt.Sprintf("%v@%v", msg.Command, rf.state.lastApplied))
 		rf.buffer <- msg // XXX: linearizable writes in tests
+	}
+	if len(outbuf) > 0 {
+		rf.dbg(dLog, "apply cmds=[%v]", strings.Join(outbuf, ", "))
 	}
 	return applied
 }
