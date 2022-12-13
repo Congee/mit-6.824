@@ -20,6 +20,7 @@
             pkgs.go-outline
             pkgs.gopkgs
             pkgs.delve
+            pkgs.impl
 
             pkgs.lnav
             pkgs.graphviz-nox
@@ -29,6 +30,9 @@
             pkgs.python310Packages.typer
             pkgs.python310Packages.ipdb
           ];
+          shellHook = ''
+            export GOROOT=$(go env GOROOT)
+          '';
         };
       });
 }
