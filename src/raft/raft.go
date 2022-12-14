@@ -19,7 +19,7 @@ package raft
 
 import (
 	"context"
-	cryptorand "crypto/rand"
+	crand "crypto/rand"
 	"encoding/binary"
 	"math/rand"
 	"reflect"
@@ -81,6 +81,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	rand             *rand.Rand
 	ElectionInterval time.Duration
 	ElectionTimer    *time.Timer
 	tick             *time.Ticker
@@ -441,11 +442,11 @@ func Make(
 
 	// Your initialization code here (2A, 2B, 2C).
 	var bytes [8]byte
-	cryptorand.Read(bytes[:])
+	crand.Read(bytes[:])
 	seed := int64(binary.LittleEndian.Uint64(bytes[:])) ^ int64(rf.me)
 	seed = int64(rf.me)
-	rand.Seed(seed)
-	interval := time.Duration(rand.Intn(int(ElectionTimeoutBase)/1e6)) * time.Millisecond
+	rf.rand = rand.New(rand.NewSource(seed))
+	interval := time.Duration(rf.rand.Intn(int(ElectionTimeoutBase)/1e6)) * time.Millisecond
 	rf.dbg(dTimer, "set election timer to %s", trktime(time.Now().Add(interval)))
 	rf.ElectionTimer = time.NewTimer(interval)
 	rf.ElectionInterval = ElectionTimeoutBase + interval

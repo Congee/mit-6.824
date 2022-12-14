@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"math/rand"
 	"strings"
 	"time"
 )
@@ -23,7 +22,7 @@ func (rf *Raft) resetTimer() {
 	future := time.Now().Add(rf.ElectionInterval)
 	rf.dbg(dTimer, "election timer -> %s@%s", trktime(future), fn)
 
-	interval := time.Duration(rand.Int63n(ElectionTimeoutBase.Milliseconds())) * time.Millisecond
+	interval := time.Duration(rf.rand.Int63n(ElectionTimeoutBase.Nanoseconds()))
 	rf.ElectionInterval = ElectionTimeoutBase + interval
 }
 
