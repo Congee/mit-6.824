@@ -54,7 +54,7 @@ func (rf *Raft) Snapshot(index int, stateMachine []byte) {
 	// 2. Discard previous snapshot file on disk
 	// 3. Discard Raft log up through child's last applied index
 	done := make(chan struct{})
-	rf.fire(TakeSnapshot{index, stateMachine, done})
+	rf.bus <- TakeSnapshot{index, stateMachine}
 	<-done
 }
 
@@ -224,7 +224,7 @@ func (rf *Raft) doInstallSnapshot(
 					rf.dbg(dSnap, "-> S%d sent snapshot req=%+v rep=%+v", server, req, rep)
 					rf.mainrun(func() {
 						if rep.Term > rf.state.currentTerm.Load() {
-							rf.fire(RoleChange{rf.role, Follower})
+							rf.bus <- RoleChange{rf.role, Follower}
 							rf.role = Follower
 							rf.persist()
 						} else {

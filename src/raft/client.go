@@ -67,7 +67,7 @@ func (rf *Raft) Start(write LabCommand) (int, int, bool) {
 	// cilent
 
 	done := make(chan StartResponse)
-	rf.fire(WriteRequest{Command{Write, hash(write), write}, done})
+	rf.bus <- WriteRequest{Command{Write, hash(write), write}, done}
 	select {
 	case <-rf.killch:
 		return 0, 0, false

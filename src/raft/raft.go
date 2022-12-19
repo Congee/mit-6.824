@@ -182,7 +182,7 @@ func (rf *Raft) GetState() (int, bool) {
 		term     int
 		isleader bool
 	})
-	rf.fire(GetState{done})
+	rf.bus <- GetState{done}
 	result := <-done
 	return result.term, result.isleader
 }
@@ -207,16 +207,12 @@ func (rf *Raft) killed() bool {
 	return rf.dead.Load()
 }
 
-func (rf *Raft) fire(ev any) {
-	go func() { rf.bus <- ev }()
-}
-
 func (rf *Raft) mainrun(thunk func()) {
 	pc := reflect.ValueOf(thunk).Pointer()
 	file, line := runtime.FuncForPC(pc).FileLine(pc)
 
 	done := make(chan struct{})
-	rf.fire(Thunk{thunk, file, line, done})
+	rf.bus <- Thunk{thunk, file, line, done}
 	<-done
 }
 
@@ -247,11 +243,11 @@ func (rf *Raft) ticker(restored <-chan struct{}) {
 			return
 		case <-rf.ElectionTimer.C:
 			rf.dbg(dTimer, "electiontimeout after %v", rf.ElectionInterval)
-			rf.fire(ElectionTimeout{rf.state.currentTerm.Load()})
+			rf.bus <- ElectionTimeout{rf.state.currentTerm.Load()}
 		case <-rf.tick.C:
 			rf.dbg(dTimer, "tick")
 			if rf.role == Leader {
-				rf.fire(BroadcastHeatbeats{empty: false})
+				rf.bus <- BroadcastHeatbeats{empty: false}
 				rf.resetTimer() // XXX: 4th case to reset the timer
 			}
 		case ev := <-rf.bus:
@@ -278,11 +274,11 @@ func (rf *Raft) handle(ev any) {
 
 	case WonElection:
 		if rf.role == Candidate {
-			rf.fire(RoleChange{rf.role, Leader})
+			rf.bus <- RoleChange{rf.role, Leader}
 			rf.role = Leader
 			rf.leaderId = rf.me
 			rf.initializeNextMatchIndex()
-			rf.fire(BroadcastHeatbeats{empty: true})
+			rf.bus <- BroadcastHeatbeats{empty: true}
 		}
 
 	case RoleChange:
@@ -332,7 +328,7 @@ func (rf *Raft) handle(ev any) {
 		ev.done <- StartResponse{index, term, isleader}
 
 		if isleader {
-			rf.fire(BroadcastHeatbeats{empty: false})
+			rf.bus <- BroadcastHeatbeats{empty: false}
 		}
 
 	case TrySetCommitIndex:

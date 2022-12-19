@@ -75,7 +75,7 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 		rf.state.currentTerm.Store(req.Term)
 		rf.voteFor(nil)
 		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, req.Term)
-		rf.fire(RoleChange{rf.role, Follower})
+		rf.bus <- RoleChange{rf.role, Follower}
 		rf.role = Follower
 		rf.persist()
 	}
@@ -83,7 +83,7 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 	if rf.role == Candidate {
 		// $5.2 If AppendEntries RPC received from new leader: convert to follower
 		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, req.Term)
-		rf.fire(RoleChange{rf.role, Follower})
+		rf.bus <- RoleChange{rf.role, Follower}
 		rf.role = Follower
 		rf.voteFor(nil)
 	}
@@ -164,7 +164,7 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 
 func (rf *Raft) AppendEntries(req *AppendEntriesReq, rep *AppendEntriesRep) {
 	done := make(chan struct{})
-	rf.fire(HandleAppendEntriesReq{req, rep, done})
+	rf.bus <- HandleAppendEntriesReq{req, rep, done}
 	<-done
 }
 
@@ -260,7 +260,7 @@ func (rf *Raft) handleAppendEntriesRep(
 	if rep.Term > term {
 		rf.state.currentTerm.Store(rep.Term)
 		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, rep.Term)
-		rf.fire(RoleChange{rf.role, Follower})
+		rf.bus <- RoleChange{rf.role, Follower}
 		rf.role = Follower
 		rf.voteFor(nil) // the peer may or may not be a leader
 		rf.persist()
@@ -379,7 +379,7 @@ func (rf *Raft) broadcastHeartbeats(ctx context.Context, empty bool) {
 
 		__req := rf.makeAppendEntriesReq(srv, empty)
 		if __req == nil {
-			rf.fire(rf.buildSendSnapshot(srv))
+			rf.bus <- rf.buildSendSnapshot(srv)
 			continue
 		}
 
@@ -399,13 +399,13 @@ func (rf *Raft) broadcastHeartbeats(ctx context.Context, empty bool) {
 			}
 
 			done := make(chan AEResponse)
-			rf.fire(HandleAppendEntriesRep{srv, &req, &rep, done})
+			rf.bus <- HandleAppendEntriesRep{srv, &req, &rep, done}
 			resp := <-done
 
 			switch resp {
 			case AESuccess:
 				if int(atomic.AddUint32(&success, 1)) > len(rf.peers)/2 {
-					once.Do(func() { rf.fire(TrySetCommitIndex{}) })
+					once.Do(func() { rf.bus <- TrySetCommitIndex{}} )
 				}
 			case AEConflict:
 				stack.Push(srv)
@@ -418,5 +418,5 @@ func (rf *Raft) broadcastHeartbeats(ctx context.Context, empty bool) {
 
 	// NOTE: still needed here because replication can happen across multiple
 	// rounds of heartbeats
-	rf.fire(TrySetCommitIndex{})
+	rf.bus <- TrySetCommitIndex{}
 }

@@ -36,7 +36,7 @@ func (rf *Raft) campaign() {
 	//   • Send RequestVote RPCs to all other servers
 	term := rf.state.currentTerm.Load()
 	rf.dbg(dVote, "role %s -> %s, term %d -> %d", rf.role, Candidate, term, term+1)
-	rf.fire(RoleChange{rf.role, Candidate})
+	rf.bus <- RoleChange{rf.role, Candidate}
 	// Do the same thing after split vote
 	rf.role = Candidate
 	rf.state.currentTerm.Add(1)
@@ -118,7 +118,7 @@ loop:
 			if rep.Term > term {
 				rf.mainrun(func() {
 					rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, rep.Term)
-					rf.fire(RoleChange{rf.role, Follower})
+					rf.bus <- RoleChange{rf.role, Follower}
 					rf.role = Follower
 					rf.state.currentTerm.Store(rep.Term)
 					rf.persist()
@@ -146,7 +146,7 @@ loop:
 	// from node C. Then, Node B received a majority of votes. Remember that it
 	// also voted for itself.
 	if yea > len(rf.peers)/2 { // 2/2, 2/3, 3/4
-		rf.fire(WonElection{})
+		rf.bus <- WonElection{}
 	}
 }
 
@@ -183,7 +183,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 
 	done := make(chan struct{})
-	rf.fire(HandleRequestVote{args, reply, done})
+	rf.bus <- HandleRequestVote{args, reply, done}
 	<-done
 }
 
@@ -201,7 +201,7 @@ func (rf *Raft) handleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 	if args.Term > term {
 		rf.state.currentTerm.Store(args.Term)
 		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, args.Term)
-		rf.fire(RoleChange{rf.role, Follower})
+		rf.bus <- RoleChange{rf.role, Follower}
 		rf.role = Follower
 		rf.voteFor(nil)
 		rf.persist()
@@ -215,7 +215,7 @@ func (rf *Raft) handleRequestVote(args *RequestVoteArgs, reply *RequestVoteReply
 		// current leader or granting vote to candidate: convert to candidate
 		rf.resetTimer()
 		rf.dbg(dTerm, "role %s -> %s, term %d -> %d", rf.role, Follower, term, args.Term)
-		rf.fire(RoleChange{rf.role, Follower})
+		rf.bus <- RoleChange{rf.role, Follower}
 		rf.role = Follower
 		rf.persist()
 		rf.dbg(dVote, "granted vote to S%d T%d", args.CandidateId, args.Term)
