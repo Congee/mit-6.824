@@ -314,7 +314,6 @@ func (rf *Raft) handle(ev any) {
 
 	case TakeSnapshot:
 		rf.takeSnapshot(ev.index, ev.stateMachine)
-		ev.done <- struct{}{}
 
 	case SendSnapshot:
 		rf.cancelrpcs(rf.InstallSnapshotCancels)
@@ -335,7 +334,7 @@ func (rf *Raft) handle(ev any) {
 		if len(rf.trySetCommitIndex()) > 0 {
 			rf.persist()
 			rf.tryApply() // Need to do this ASAP in case of congested ev.bus to update LeaderCommit
-			rf.persist()
+			rf.persist() // FIXME: lastApplied read your write?
 		}
 
 	case TryApply:
@@ -410,7 +409,7 @@ func (rf *Raft) tryApply() []int {
 		}
 
 		outbuf = append(outbuf, fmt.Sprintf("%v@%v", msg.Command, rf.state.lastApplied))
-		rf.buffer <- msg // XXX: linearizable writes in tests
+		rf.applyCh <- msg // XXX: linearizability
 	}
 	if len(outbuf) > 0 {
 		rf.dbg(dLog, "apply cmds=[%v]", strings.Join(outbuf, ", "))

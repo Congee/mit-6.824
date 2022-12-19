@@ -1191,6 +1191,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 	leader1 := cfg.checkOneLeader()
 
 	for i := 0; i < iters; i++ {
+		dbg(dTest, "T0   S0 snapcommon() round=%d", i)
 		victim := (leader1 + 1) % servers
 		sender := leader1
 		if i%3 == 1 {
@@ -1278,6 +1279,7 @@ func TestSnapshotAllCrash2D(t *testing.T) {
 	cfg.one(rand.Int(), servers, true)
 
 	for i := 0; i < iters; i++ {
+		dbg(dTest, "T0   S0 SnapshotAllCrash() round=%d", i)
 		// perhaps enough to get a snapshot
 		nn := (SnapShotInterval / 2) + (rand.Int() % SnapShotInterval)
 		for i := 0; i < nn; i++ {

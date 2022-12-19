@@ -53,9 +53,7 @@ func (rf *Raft) Snapshot(index int, stateMachine []byte) {
 	//   disk
 	// 2. Discard previous snapshot file on disk
 	// 3. Discard Raft log up through child's last applied index
-	done := make(chan struct{})
 	rf.bus <- TakeSnapshot{index, stateMachine}
-	<-done
 }
 
 func (rf *Raft) takeSnapshot(index int, stateMachine []byte) {
@@ -72,8 +70,7 @@ func (rf *Raft) takeSnapshot(index int, stateMachine []byte) {
 	rf.snapshotted.lastIncludedIndex = entry.Index
 	rf.snapshotted.lastIncludedTerm = entry.Term
 
-	rf.persist()
-	rf.persister.SaveStateAndSnapshot(rf.persister.ReadRaftState(), stateMachine)
+	rf.persistStateSnapshot(stateMachine)
 }
 
 func (rf *Raft) InstallSnapshot(
@@ -105,7 +102,6 @@ func (rf *Raft) InstallSnapshot(
 		rf.dbg(dSnap, "begin snap persisted=%+v state=%v", rf.persisted, rf.state)
 
 		lastidx := rf.state.baseidx + len(rf.state.log)
-		savesnap := false
 		assert(rf.state.baseidx == rf.snapshotted.lastIncludedIndex)
 		rf.dbg(dSnap, "rcvd InstallSnapshot from S%d req=%+v", req.LeaderId, req)
 		// NOTE: don't mess with nextIndex[perr] tracked by the leader
@@ -121,8 +117,7 @@ func (rf *Raft) InstallSnapshot(
 		} else if req.LastIncludedIndex >= lastidx {
 			// apply snapshot and truncate log
 			rf.dbg(dSnap, "applyin snapshot Index=%d Term=%d state=%+v", msg.SnapshotIndex, msg.SnapshotTerm, rf.state)
-			rf.buffer <- msg
-			savesnap = true
+			rf.applyCh <- msg
 
 			rf.state.log = []Entry{}
 
@@ -137,7 +132,6 @@ func (rf *Raft) InstallSnapshot(
 		} else if req.LastIncludedIndex > rf.snapshotted.lastIncludedIndex && req.LastIncludedIndex <= rf.state.lastApplied {
 			// just trim log
 			rf.dbg(dSnap, "trim log=%v -> %v:", rf.state.log, req.LastIncludedIndex-rf.state.baseidx)
-			savesnap = true
 
 			rf.state.log = rf.state.log[req.LastIncludedIndex-rf.state.baseidx:]
 
@@ -152,8 +146,7 @@ func (rf *Raft) InstallSnapshot(
 		} else if req.LastIncludedIndex > rf.snapshotted.lastIncludedIndex && req.LastIncludedIndex > rf.state.lastApplied {
 			// apply snapshot and trim log
 			rf.dbg(dSnap, "trim apply log=%v -> %v:", rf.state.log, req.LastIncludedIndex-rf.state.baseidx)
-			rf.buffer <- msg
-			savesnap = true
+			rf.applyCh <- msg
 
 			rf.state.log = rf.state.log[req.LastIncludedIndex-rf.state.baseidx:]
 
@@ -166,10 +159,7 @@ func (rf *Raft) InstallSnapshot(
 			rf.dbg(dSnap, "trimmed applied state=%v persisted=%+v", rf.state, rf.persisted)
 		}
 
-		rf.persist()
-		if savesnap {
-			rf.persister.SaveStateAndSnapshot(rf.persister.ReadRaftState(), req.Data)
-		}
+		rf.persistStateSnapshot(req.Data)
 		rf.dbg(dSnap, "end   snap persisted=%+v state=%v", rf.persisted, rf.state)
 	})
 }

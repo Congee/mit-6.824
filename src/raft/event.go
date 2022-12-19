@@ -28,7 +28,6 @@ type (
 	TakeSnapshot struct {
 		index        int
 		stateMachine []byte
-		done         chan struct{}
 	}
 	SendSnapshot struct {
 		srv int

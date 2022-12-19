@@ -115,7 +115,12 @@ func (req InstallSnapshotReq) String() string {
 }
 
 func (ss SendSnapshot) String() string {
-	return fmt.Sprintf("{srv:%d req:%v rep:%v}", ss.srv, ss.req, ss.rep)
+	return fmt.Sprintf(
+		"{srv:%d req:%v rep:%v}",
+		ss.srv,
+		ss.req,
+		ss.rep,
+	)
 }
 
 func (ts TakeSnapshot) String() string {

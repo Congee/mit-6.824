@@ -109,10 +109,13 @@ func (rf *Raft) handleAppendEntriesReq(req *AppendEntriesReq, rep *AppendEntries
 	// 1 2 2 3 3-4 5    -- Leader
 	// 1 2 2 2 2 3 3 3  -- Follower
 	//     * - p - -
-	if req.PrevLogIndex == baseidx {
-		// It matches in case of the initial heartbeat
+	if req.PrevLogIndex == baseidx { // stale AppendEntries or initial heartbeat
+
+	} else if req.PrevLogIndex < baseidx {
+		// TODO: case of < for ConflictIndex
+		return
 	} else if req.PrevLogIndex > baseidx+len(rf.state.log) {
-		rep.ConflictIndex = max(1, baseidx+len(rf.state.log))
+		rep.ConflictIndex = max(1, baseidx+len(rf.state.log)) // TODO
 		rep.ConflictTerm = nil
 		return
 		// base=6 log=[7,8,9]
@@ -196,7 +199,7 @@ func (rf *Raft) makeAppendEntriesReq(srv int, empty bool) *AppendEntriesReq {
 	// NOTE: log compaction may have happened between AppendEntries RPCs
 	// 1 [2 3]
 	if req.PrevLogIndex == rf.state.baseidx {
-		req.PrevLogTerm = rf.persisted.lastLogTerm
+		req.PrevLogTerm = rf.snapshotted.lastIncludedTerm
 	} else if req.PrevLogIndex > rf.state.baseidx {
 		req.PrevLogTerm = rf.state.log[req.PrevLogIndex-1-rf.state.baseidx].Term
 	} else {
@@ -379,7 +382,7 @@ func (rf *Raft) broadcastHeartbeats(ctx context.Context, empty bool) {
 
 		__req := rf.makeAppendEntriesReq(srv, empty)
 		if __req == nil {
-			rf.bus <- rf.buildSendSnapshot(srv)
+			rf.bus <- rf.buildSendSnapshot(srv)  // TODO: do we need a priority queue?
 			continue
 		}
 

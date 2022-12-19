@@ -89,6 +89,7 @@ func (rf *Raft) persist() {
 		rf.persisted.commitIndex == state.CommitIndex &&
 		rf.persisted.lastApplied == state.LastApplied &&
 		rf.persisted.lastIncludedIndex == state.LastIncludedIndex {
+		rf.dbg(dPersist, "skipped; persisted=%+v state=%+v", rf.persisted, state)
 		return
 	}
 
@@ -96,6 +97,29 @@ func (rf *Raft) persist() {
 	w := new(bytes.Buffer)
 	labgob.NewEncoder(w).Encode(&state)
 	rf.persister.SaveRaftState(w.Bytes())
+
+	// Update for the next comparison
+	rf.persisted.currentTerm = state.Term
+	rf.persisted.votedFor = state.VotedFor
+	rf.persisted.lastLogIndex = lastidx
+	rf.persisted.lastLogTerm = rf.getLastLogTerm()
+	rf.persisted.commitIndex = state.CommitIndex
+	rf.persisted.lastApplied = state.LastApplied
+	rf.persisted.lastIncludedIndex = state.LastIncludedIndex
+	rf.persisted.lastIncludedTerm = state.LastIncludedTerm
+
+	rf.dbg(dPersist, "persisted=%+v state=%v", rf.persisted, rf.state)
+}
+
+// TODO: abstract duplicate logic
+func (rf *Raft) persistStateSnapshot(snapshot []byte) {
+	lastidx := rf.state.baseidx + len(rf.state.log)
+	state := rf.makeCrashState()
+
+	// Persist to disk
+	w := new(bytes.Buffer)
+	labgob.NewEncoder(w).Encode(&state)
+	rf.persister.SaveStateAndSnapshot(w.Bytes(), snapshot)
 
 	// Update for the next comparison
 	rf.persisted.currentTerm = state.Term
