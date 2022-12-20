@@ -258,9 +258,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		atomic.StoreInt32(&done_partitioner, 0)
 		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {
 			j := 0
-			defer func() {
-				clnts[cli] <- j
-			}()
+			defer func() { clnts[cli] <- j }()
 			last := "" // only used when not randomkeys
 			if !randomkeys {
 				Put(cfg, myck, strconv.Itoa(cli), last, opLog, cli)

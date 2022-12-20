@@ -1,10 +1,16 @@
 package kvraft
 
+type Status uint8
+
 const (
-	OK             = "OK"
-	ErrNoKey       = "ErrNoKey"
-	ErrWrongLeader = "ErrWrongLeader"
+	OK Status = iota
+	ErrNoKey
+	ErrWrongLeader
 )
+
+func (s Status) String() string {
+	return [...]string{"OK", "ErrNoKey", "ErrWrongLeader"}[s]
+}
 
 type Err string
 
