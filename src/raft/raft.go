@@ -222,7 +222,9 @@ func (rf *Raft) cancelrpcs(fns []context.CancelFunc) {
 	}
 }
 
-// start as a follower ... no communication (election timeout) ... then election
+func (rf *Raft) GetLeaderId(req *struct{}, rep *int) {
+	rf.mainrun(func() { *rep = rf.leaderId })
+}
 
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
@@ -334,7 +336,7 @@ func (rf *Raft) handle(ev any) {
 		if len(rf.trySetCommitIndex()) > 0 {
 			rf.persist()
 			rf.tryApply() // Need to do this ASAP in case of congested ev.bus to update LeaderCommit
-			rf.persist() // FIXME: lastApplied read your write?
+			rf.persist()  // FIXME: lastApplied read your write?
 		}
 
 	case TryApply:
