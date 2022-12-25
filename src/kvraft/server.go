@@ -38,6 +38,11 @@ type LabCommand struct {
 }
 type GarbageCollector struct{}
 
+type CacheKey struct {
+	clientId int64
+	seq      uint64
+}
+
 type KVServer struct {
 	mu      sync.Mutex
 	me      int
@@ -53,9 +58,12 @@ type KVServer struct {
 	sm           StateMachine[Key, Value]
 	bus          chan any
 	killch       chan struct{}
+
+	cache map[CacheKey]time.Time // TODO: bloomfilter
 }
 
 func (kv *KVServer) applier() {
+	kv.dbg(dServer, "started applier()")
 	for msg := range kv.applyCh {
 		assert(msg.CommandValid)
 		cmd := msg.Command.(LabCommand)
@@ -80,6 +88,7 @@ func (kv *KVServer) gc() {
 				delete(kv.clients, key)
 			}
 		}
+		// TODO: clear expired cache entries
 		kv.mu.Unlock()
 
 		time.Sleep(1 * time.Second)
@@ -87,19 +96,20 @@ func (kv *KVServer) gc() {
 }
 
 func (kv *KVServer) loop() {
+	kv.dbg(dServer, "started loop()")
 	for !kv.killed() {
 		select {
 		case <-kv.killch:
 			return
 		case ev := <-kv.bus:
 			if !kv.killed() {
+				kv.dbg(dServer, "event %T%v; len(kv.bus)=%d", ev, ev, len(kv.bus))
 				kv.handle(ev)
+				kv.dbg(dServer, "procd %T%v; len(kv.bus)=%d", ev, ev, len(kv.bus))
 			}
 		}
 	}
 }
-
-// TODO: bloomfilter
 
 func (kv *KVServer) handle(ev any) {
 	switch ev := ev.(type) {
@@ -109,7 +119,7 @@ func (kv *KVServer) handle(ev any) {
 		if !isleader {
 			ev.rep.Status = kErrWrongLeader
 			kv.rf.GetLeaderId(nil, &ev.rep.LeaderHint)
-			ev.rep.ClientId = -1 // FIXME
+			ev.rep.ClientId = ev.req.ClientId // FIXME
 			return
 		}
 
@@ -127,13 +137,20 @@ func (kv *KVServer) handle(ev any) {
 		index, _, isleader := kv.rf.Start(cmd)
 
 		if !isleader {
+			kv.dbg(dServer, "wrong leader for req=%+v", ev.req)
 			ev.rep.Status = kErrWrongLeader
 			kv.rf.GetLeaderId(nil, &ev.rep.LeaderHint)
-			ev.rep.ClientId = -1 // FIXME
+			ev.rep.ClientId = ev.req.ClientId // FIXME
+			return
+		}
+
+		cachekey := CacheKey{ev.req.ClientId, ev.req.Seq}
+		if _, ok := kv.cache[cachekey]; ok {
 			return
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		done := make(chan struct{})
 		select {
 		case value, ok := <-kv.sm.wait(ctx, ev.req.Key):
@@ -142,7 +159,7 @@ func (kv *KVServer) handle(ev any) {
 				break
 			}
 
-			if index == value.index {
+			if index == value.index { // FIXME: ABA problem
 				ev.rep.Status = kOk
 			} else {
 				ev.rep.Status = kErrWrongLeader
@@ -153,7 +170,6 @@ func (kv *KVServer) handle(ev any) {
 			ev.rep.Status = kOk
 		case <-time.After(2 * time.Second):
 			ev.rep.Status = kServerTimeout
-			cancel()
 		}
 	}
 }
@@ -221,6 +237,7 @@ func StartKVServer(
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
+	labgob.Register(LabCommand{})
 
 	kv := new(KVServer)
 	kv.me = me
@@ -232,6 +249,7 @@ func StartKVServer(
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	kv.killch = make(chan struct{})
 	kv.bus = make(chan any, 1024)
+	kv.cache = make(map[CacheKey]time.Time)
 
 	// You may need initialization code here.
 	go kv.applier()

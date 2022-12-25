@@ -59,7 +59,7 @@ func init() {
 
 func dbg(topic logTopic, format string, a ...any) {
 	if Debug {
-		prefix := fmt.Sprintf("%s %v ", trktime(time.Now()), topic)
+		prefix := fmt.Sprintf("%s %v ", Trktime(time.Now()), topic)
 		format = prefix + format
 		log.Printf(format, a...)
 	}

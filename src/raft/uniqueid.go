@@ -10,7 +10,7 @@ type SnowflakeId struct {
 	seq      int
 }
 
-func (s *SnowflakeId) generate() int64 {
+func (s *SnowflakeId) Generate() int64 {
 	// 1 bit    41 bits            5 bits  5 bits           12 bits
 	// 0 |   timestamp             |DC   |  M.A.C. |        seq no     |
 
@@ -23,4 +23,8 @@ func (s *SnowflakeId) generate() int64 {
 	}
 	timestamp := (now & mask) >> 1
 	return timestamp | int64(s.seq)
+}
+
+func NewSnowflakeId() SnowflakeId {
+	return SnowflakeId{time.Now().UnixMilli(), 0}
 }

@@ -287,9 +287,11 @@ func (rf *Raft) handle(ev any) {
 		switch ev.from {
 		case Candidate:
 			rf.cancelrpcs(rf.RequestVoteCancels)
+			rf.leaderId = -1
 		case Leader:
 			rf.cancelrpcs(rf.AppendEntriesCancels)
 			rf.cancelrpcs(rf.InstallSnapshotCancels)
+			rf.leaderId = -1
 		}
 
 	case ElectionTimeout:
@@ -502,7 +504,7 @@ func Make(
 	seed = int64(rf.me)
 	rf.rand = rand.New(rand.NewSource(seed))
 	interval := time.Duration(rf.rand.Intn(int(ElectionTimeoutBase)/1e6)) * time.Millisecond
-	rf.dbg(dTimer, "set election timer to %s", trktime(time.Now().Add(interval)))
+	rf.dbg(dTimer, "set election timer to %s", Trktime(time.Now().Add(interval)))
 	rf.ElectionTimer = time.NewTimer(interval)
 	rf.ElectionInterval = ElectionTimeoutBase + interval
 

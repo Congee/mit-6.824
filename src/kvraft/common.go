@@ -32,6 +32,7 @@ type WriteReq struct {
 	Value    string
 	Op       string
 	ClientId int64
+	Seq      uint64
 }
 
 type WriteRep struct {
@@ -43,6 +44,7 @@ type WriteRep struct {
 type ReadReq struct {
 	Key      string
 	ClientId int64
+	Seq      uint64
 }
 
 type ReadRep struct {

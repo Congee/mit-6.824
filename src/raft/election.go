@@ -20,7 +20,7 @@ func (rf *Raft) resetTimer() {
 	fname, _ := caller(2)
 	fn := last(strings.Split(fname, "."))
 	future := time.Now().Add(rf.ElectionInterval)
-	rf.dbg(dTimer, "election timer -> %s@%s", trktime(future), fn)
+	rf.dbg(dTimer, "election timer -> %s@%s", Trktime(future), fn)
 
 	interval := time.Duration(rf.rand.Int63n(ElectionTimeoutBase.Nanoseconds()))
 	rf.ElectionInterval = ElectionTimeoutBase + interval

@@ -166,7 +166,7 @@ func last[T any](slice []T) T {
 }
 
 // Returns microseconds padded up to 8 digits since `debugStart`.
-func trktime(t time.Time) string {
+func Trktime(t time.Time) string {
 	return fmt.Sprintf("%08d", int(t.UnixMicro()-debugStart.UnixMicro()))
 }
 

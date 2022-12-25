@@ -5,8 +5,11 @@
     "description": "Log format compatiable with the tool `dslogs`",
     "file-pattern": ".*raft/.*log$",
     "regex": {
-      "basic": {
+      "raft": {
         "pattern": "^(?<timestamp>[0-9]) (?<ts>[0-9]{8}) (?<type>[A-Z0-9]{4}) (?<term>T[ 0-9]{3}) (?<server>S[0-9]+) (?<msg>.+)$"
+      },
+      "kvraft": {
+        "pattern": "^(?<timestamp>[0-9]) (?<ts>[0-9]{8}) (?<type>[A-Z0-9]{4}) (?<msg>.+)$"
       }
     },
     "timestamp-format": ["%6"],
@@ -61,6 +64,9 @@
     "sample": [
       {
         "line": "1 00372603 LOG1 T15  S4 updated for S0 nextIndex=[54 53 53 53 54] matchIndex=[53 0 52 0 53]"
+      },
+      {
+        "line": "1 00003465 CLNT call succeeded with req=&{Key:0 Value: Op:Put ClientId:835926884353 Seq:1} rep=&{Status:ErrWrongLeader LeaderHint:-1 ClientId:835926884353}"
       }
     ]
   }
